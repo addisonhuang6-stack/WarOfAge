@@ -1,11 +1,47 @@
 {
 	"enemy_ai": false,
 	"player": [
-		{ "type": "spearman", "count": 6, "origin": [-6.0, 0.0, -3.0], "direction": [0.0, 0.0, 1.0], "step": 1.2 },
-		{ "type": "light_cavalry", "count": 4, "origin": [-7.6, 0.0, -2.4], "direction": [0.0, 0.0, 1.0], "step": 1.5 }
+		{
+			"type": "spearman",
+			"count": 50,
+			"origin": [-3.2, 0.0, -1.35],
+			"direction": [0.0, 0.0, 1.0],
+			"step": 0.24,
+			"columns": 5,
+			"column_direction": [-1.0, 0.0, 0.0],
+			"column_step": 0.2
+		},
+		{
+			"type": "light_cavalry",
+			"count": 20,
+			"origin": [-5.2, 0.0, -1.2],
+			"direction": [0.0, 0.0, 1.0],
+			"step": 0.45,
+			"columns": 4,
+			"column_direction": [-1.0, 0.0, 0.0],
+			"column_step": 0.2
+		}
 	],
 	"enemy": [
-		{ "type": "light_cavalry", "count": 6, "origin": [6.0, 0.0, -3.0], "direction": [0.0, 0.0, 1.0], "step": 1.5 },
-		{ "type": "spearman", "count": 4, "origin": [7.6, 0.0, -2.4], "direction": [0.0, 0.0, 1.0], "step": 1.3 }
+		{
+			"type": "spearman",
+			"count": 50,
+			"origin": [3.2, 0.0, -1.35],
+			"direction": [0.0, 0.0, 1.0],
+			"step": 0.24,
+			"columns": 5,
+			"column_direction": [1.0, 0.0, 0.0],
+			"column_step": 0.2
+		},
+		{
+			"type": "light_cavalry",
+			"count": 20,
+			"origin": [5.2, 0.0, -1.2],
+			"direction": [0.0, 0.0, 1.0],
+			"step": 0.45,
+			"columns": 4,
+			"column_direction": [1.0, 0.0, 0.0],
+			"column_step": 0.2
+		}
 	]
 }

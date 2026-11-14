@@ -86,7 +86,7 @@ func _physics_process(delta: float) -> void:
 func _setup_world() -> void:
 	camera = Camera3D.new()
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 7.5
+	camera.size = 5.0
 	camera.position = Vector3(0.0, 10.0, 0.0)
 	camera.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 	add_child(camera)
@@ -214,10 +214,17 @@ func _spawn_groups(groups: Variant, team_id: int) -> void:
 		var origin_data: Array = group.get("origin", [0.0, 0.0, 0.0])
 		var direction_data: Array = group.get("direction", [0.0, 0.0, 1.0])
 		var step := float(group.get("step", 1.0))
+		var columns := maxi(int(group.get("columns", 1)), 1)
+		var column_step := float(group.get("column_step", 0.0))
+		var column_dir_data: Array = group.get("column_direction", [0.0, 0.0, 0.0])
 		var origin := Vector3(float(origin_data[0]), 0.0, float(origin_data[2]))
 		var direction := Vector3(float(direction_data[0]), 0.0, float(direction_data[2])).normalized()
+		var column_direction := Vector3(float(column_dir_data[0]), 0.0, float(column_dir_data[2]))
 		for i in range(count):
-			_spawn_unit(type_name, team_id, origin + direction * (step * float(i)))
+			var row := int(i / columns)
+			var column := i % columns
+			var offset := direction * (step * float(row)) + column_direction * (column_step * float(column))
+			_spawn_unit(type_name, team_id, origin + offset)
 
 
 func _spawn_unit(type_name: String, team_id: int, position: Vector3) -> void:

@@ -94,7 +94,8 @@ func _physics_process(delta: float) -> void:
 						_attack(current_target)
 				else:
 					current_target = null
-		_apply_separation(delta)
+		if not move_points.is_empty():
+			_apply_separation(delta)
 
 	_update_marker_rotation()
 

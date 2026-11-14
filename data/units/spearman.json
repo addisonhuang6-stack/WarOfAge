@@ -9,7 +9,7 @@
 		"armor": 2,
 		"min_damage": 1,
 		"speed": 1.26,
-		"radius": 0.55,
+		"radius": 0.055,
 		"attack_range": 1.6,
 		"attack_interval": 1.2,
 		"aggro_range": 5.0,
