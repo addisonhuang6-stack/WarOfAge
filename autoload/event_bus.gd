@@ -17,3 +17,6 @@ signal battle_ended(winner_player_id: int)
 
 ## 当前选中单位数量变化（供 HUD 更新）。
 signal selection_changed(selected_count: int)
+
+## 冲锋经过地面时产生灰尘。
+signal charge_dust(position: Vector3)

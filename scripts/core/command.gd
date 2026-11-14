@@ -21,6 +21,9 @@ extends Resource
 ## 一次移动令只产生一条 Command；新的移动令会整体覆盖旧路径。
 @export var waypoints: Array[Vector3] = []
 
+## 到达后希望保持的朝向（用于防御线等阵型命令）；零向量表示不指定。
+@export var facing: Vector3 = Vector3.ZERO
+
 ## 指令生效的模拟 tick 序号。
 @export var tick: int = 0
 
@@ -40,6 +43,7 @@ func to_dict() -> Dictionary:
 			target_position.z,
 		],
 		"waypoints": waypoint_data,
+		"facing": [facing.x, facing.y, facing.z],
 		"tick": tick
 	}
 
@@ -75,6 +79,10 @@ static func from_dict(data: Dictionary) -> Command:
 					float(raw_point[1]),
 					float(raw_point[2])
 				))
+
+	var raw_facing: Variant = data.get("facing", [])
+	if raw_facing is Array and raw_facing.size() >= 3:
+		command.facing = Vector3(float(raw_facing[0]), float(raw_facing[1]), float(raw_facing[2]))
 
 	command.tick = int(data.get("tick", 0))
 	return command

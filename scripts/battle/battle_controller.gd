@@ -42,6 +42,10 @@ var _enemy_ai_enabled: bool = false
 var _ai_timer: float = 0.5
 var _battle_over: bool = false
 var _battle_result: int = -1
+var control_groups: Dictionary = {}
+var _drawing_defense_line: bool = false
+var _defense_line_start := Vector3.ZERO
+var _defense_line_current := Vector3.ZERO
 
 
 func _ready() -> void:
@@ -54,6 +58,7 @@ func _ready() -> void:
 	EventBus.unit_died.connect(_on_unit_died)
 	EventBus.unit_attacked.connect(_on_unit_attacked)
 	EventBus.battle_ended.connect(_on_battle_ended)
+	EventBus.charge_dust.connect(_on_charge_dust)
 
 	_update_hud()
 
@@ -117,19 +122,19 @@ func _setup_ui() -> void:
 	ui_font = SystemFont.new()
 	ui_font.font_names = PackedStringArray(["PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Helvetica"])
 
-	instruction_label = _make_label(Vector2(12.0, 10.0), 18)
+	instruction_label = _make_label(Vector2(12.0, 8.0), 15)
 	instruction_label.text = GameSettings.t("battle.instructions")
 
-	var counter_label := _make_label(Vector2(12.0, 34.0), 16)
+	var counter_label := _make_label(Vector2(12.0, 50.0), 16)
 	counter_label.text = GameSettings.t("battle.counter")
 	counter_label.modulate = Color(1.0, 0.85, 0.4)
 
-	status_label = _make_label(Vector2(12.0, 58.0), 16)
-	map_label = _make_label(Vector2(12.0, 82.0), 16)
+	status_label = _make_label(Vector2(12.0, 74.0), 16)
+	map_label = _make_label(Vector2(12.0, 98.0), 16)
 	map_label.modulate = Color(0.72, 0.84, 1.0)
-	result_label = _make_label(Vector2(12.0, 112.0), 30)
+	result_label = _make_label(Vector2(12.0, 128.0), 30)
 	result_label.visible = false
-	return_hint_label = _make_label(Vector2(12.0, 152.0), 17)
+	return_hint_label = _make_label(Vector2(12.0, 168.0), 17)
 	return_hint_label.text = GameSettings.t("battle.return_hint")
 	return_hint_label.modulate = Color(0.8, 0.86, 0.9)
 	return_hint_label.visible = false
@@ -260,7 +265,7 @@ func _box_select(from: Vector2, to: Vector2, additive: bool) -> void:
 		var unit: UnitBase = units_by_id[id]
 		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id != 0:
 			continue
-		var center := camera.unproject_position(unit.global_position + Vector3(0.0, unit.radius * 1.05, 0.0))
+		var center := camera.unproject_position(unit.global_position)
 		if rect.has_point(center):
 			found.append(unit)
 	if additive:
@@ -279,7 +284,7 @@ func _pick_unit(screen_position: Vector2) -> UnitBase:
 		var unit: UnitBase = units_by_id[id]
 		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id != 0:
 			continue
-		var center := camera.unproject_position(unit.global_position + Vector3(0.0, unit.radius * 1.05, 0.0))
+		var center := camera.unproject_position(unit.global_position)
 		var distance := screen_position.distance_to(center)
 		if distance < best_distance:
 			best = unit
@@ -328,6 +333,142 @@ func _issue_move(points: Array[Vector3]) -> void:
 	EventBus.command_issued.emit(command)
 
 
+func _issue_charge() -> void:
+	var unit_ids: Array[int] = []
+	for unit in selected_units:
+		if is_instance_valid(unit) and float(unit.data.get_stat(&"charge_max_speed", 0.0)) > 0.0:
+			unit_ids.append(unit.instance_id)
+	if unit_ids.is_empty():
+		return
+	var command := Command.new()
+	command.type = &"charge"
+	command.player_id = 0
+	command.unit_ids = unit_ids
+	command.tick = Engine.get_process_frames()
+	EventBus.command_issued.emit(command)
+	GameSettings.play_click()
+
+
+func _select_same_type() -> void:
+	if selected_units.is_empty():
+		return
+	var type_id: StringName = selected_units[0].data.id
+	var same_type: Array[UnitBase] = []
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if is_instance_valid(unit) and unit.hp > 0.0 and unit.player_id == 0 and unit.data.id == type_id:
+			same_type.append(unit)
+	if same_type.is_empty():
+		return
+	selected_units = same_type
+	_refresh_selection()
+
+
+func _assign_control_group(index: int) -> void:
+	if selected_units.is_empty():
+		return
+	var unit_ids: Array[int] = []
+	for unit in selected_units:
+		if is_instance_valid(unit):
+			unit_ids.append(unit.instance_id)
+	control_groups[index] = unit_ids
+	GameSettings.play_click()
+
+
+func _select_control_group(index: int) -> void:
+	var stored: Variant = control_groups.get(index, [])
+	if not (stored is Array):
+		return
+	var chosen: Array[UnitBase] = []
+	for raw_id in stored:
+		var unit_id := int(raw_id)
+		if not units_by_id.has(unit_id):
+			continue
+		var unit: UnitBase = units_by_id[unit_id]
+		if is_instance_valid(unit) and unit.hp > 0.0:
+			chosen.append(unit)
+	selected_units = chosen
+	_refresh_selection()
+
+
+func _digit_group(keycode: int) -> int:
+	if keycode >= KEY_1 and keycode <= KEY_9:
+		return int(keycode) - int(KEY_1) + 1
+	return 0
+
+
+func _issue_defense_line(start: Vector3, finish: Vector3) -> void:
+	if selected_units.is_empty():
+		return
+	var flat_start := Vector3(start.x, 0.0, start.z)
+	var flat_finish := Vector3(finish.x, 0.0, finish.z)
+	var segment := flat_finish - flat_start
+	if segment.length() < 0.3:
+		return
+	var direction := segment.normalized()
+	var perpendicular := Vector3(-direction.z, 0.0, direction.x)
+	var midpoint := flat_start.lerp(flat_finish, 0.5)
+	var line_facing := _line_facing(midpoint, perpendicular)
+	var count := selected_units.size()
+	var tick := Engine.get_process_frames()
+	for i in range(count):
+		var unit: UnitBase = selected_units[i]
+		if not is_instance_valid(unit):
+			continue
+		var t := 0.5 if count == 1 else float(i) / float(count - 1)
+		var target := flat_start.lerp(flat_finish, t)
+		var command := Command.new()
+		command.type = &"move"
+		command.player_id = 0
+		command.unit_ids.assign([unit.instance_id])
+		command.waypoints.assign([target])
+		command.target_position = target
+		command.facing = line_facing
+		command.tick = tick
+		tick += 1
+		EventBus.command_issued.emit(command)
+	GameSettings.play_click()
+
+
+func _line_facing(midpoint: Vector3, perpendicular: Vector3) -> Vector3:
+	var best: UnitBase = null
+	var best_distance := INF
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id == 0:
+			continue
+		var distance := Vector2(unit.global_position.x - midpoint.x, unit.global_position.z - midpoint.z).length()
+		if distance < best_distance:
+			best = unit
+			best_distance = distance
+	if best == null:
+		return perpendicular
+	var to_enemy := Vector3(best.global_position.x - midpoint.x, 0.0, best.global_position.z - midpoint.z)
+	return perpendicular if to_enemy.dot(perpendicular) >= 0.0 else -perpendicular
+
+
+func _on_charge_dust(position: Vector3) -> void:
+	var dust := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = randf_range(0.22, 0.4)
+	mesh.bottom_radius = mesh.top_radius
+	mesh.height = 0.02
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(0.88, 0.87, 0.83, 0.4)
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	dust.mesh = mesh
+	dust.material_override = material
+	dust.position = position + Vector3(randf_range(-0.12, 0.12), 0.005, randf_range(-0.12, 0.12))
+	add_child(dust)
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(dust, "scale", Vector3(2.2, 1.0, 2.2), 1.0)
+	tween.tween_property(material, "albedo_color:a", 0.0, 1.0)
+	tween.chain().tween_callback(dust.queue_free)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
 		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
@@ -336,6 +477,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_tree().reload_current_scene()
 		elif event.keycode == KEY_ESCAPE:
 			_clear_selection()
+		elif not _battle_over:
+			var group_index := _digit_group(event.keycode)
+			if group_index > 0:
+				if event.ctrl_pressed or event.meta_pressed or Input.is_key_pressed(KEY_T):
+					_assign_control_group(group_index)
+				else:
+					_select_control_group(group_index)
+			elif event.keycode == KEY_T:
+				_select_same_type()
+			elif event.keycode == KEY_C:
+				_issue_charge()
 		return
 
 	# 视角缩放与平移：战斗结束后依然可用
@@ -380,7 +532,11 @@ func _handle_left_button(event: InputEventMouseButton) -> void:
 			else:
 				_select_single(unit)
 		else:
-			if not selected_units.is_empty():
+			if (event.ctrl_pressed or event.meta_pressed) and not selected_units.is_empty():
+				_drawing_defense_line = true
+				_defense_line_start = _mouse_to_ground(event.position)
+				_defense_line_current = _defense_line_start
+			elif not selected_units.is_empty():
 				_drawing_path = true
 				_drag_path_world.clear()
 				_path_preview.clear()
@@ -394,7 +550,10 @@ func _handle_left_button(event: InputEventMouseButton) -> void:
 				_box_shift = event.shift_pressed
 		selection_box.queue_redraw()
 	else:
-		if _drawing_path:
+		if _drawing_defense_line:
+			_drawing_defense_line = false
+			_issue_defense_line(_defense_line_start, _defense_line_current)
+		elif _drawing_path:
 			_drawing_path = false
 			_issue_move(_drag_path_world)
 			_drag_path_world.clear()
@@ -409,7 +568,10 @@ func _handle_left_button(event: InputEventMouseButton) -> void:
 
 
 func _handle_motion(event: InputEventMouseMotion) -> void:
-	if _drawing_path:
+	if _drawing_defense_line:
+		_defense_line_current = _mouse_to_ground(event.position)
+		selection_box.queue_redraw()
+	elif _drawing_path:
 		var world := _mouse_to_ground(event.position)
 		if _drag_path_world.is_empty() or _drag_path_world.back().distance_to(world) >= 0.7:
 			_drag_path_world.append(world)
@@ -427,6 +589,15 @@ func _draw_selection_box() -> void:
 		selection_box.draw_rect(rect, Color(0.4, 0.75, 1.0, 0.9), false, 2.0)
 	if _drawing_path:
 		_draw_dashed(_path_preview, Color(1.0, 0.9, 0.4, 0.95), 3.0)
+	if _drawing_defense_line:
+		var from := camera.unproject_position(_defense_line_start)
+		var to := camera.unproject_position(_defense_line_current)
+		selection_box.draw_line(from, to, Color(0.35, 0.9, 1.0, 0.95), 3.0)
+		var screen_dir := to - from
+		if screen_dir.length() > 0.001:
+			var normal := Vector2(-screen_dir.y, screen_dir.x).normalized()
+			selection_box.draw_line(from - normal * 10.0, from + normal * 10.0, Color(0.35, 0.9, 1.0, 0.95), 2.0)
+			selection_box.draw_line(to - normal * 10.0, to + normal * 10.0, Color(0.35, 0.9, 1.0, 0.95), 2.0)
 
 
 func _draw_dashed(points: PackedVector2Array, color: Color, width: float) -> void:

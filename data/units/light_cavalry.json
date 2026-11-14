@@ -2,6 +2,7 @@
 	"id": "light_cavalry",
 	"name": "轻骑兵",
 	"tags": ["cavalry", "melee"],
+	"shape": "triangle",
 	"stats": {
 		"hp": 160,
 		"attack": 18,
@@ -14,7 +15,13 @@
 		"aggro_range": 6.0,
 		"counter_tags": [],
 		"counter_multiplier": 1.0,
-		"separation_strength": 2.0
+		"separation_strength": 2.0,
+		"toughness": 2.0,
+		"charge_max_speed": 14.0,
+		"charge_duration": 4.0,
+		"charge_max_duration": 7.0,
+		"charge_push_scale": 0.16,
+		"charge_friendly_dodge": 1.6
 	},
 	"texture": "res://assets/units/light_cavalry.png"
 }
