@@ -308,7 +308,7 @@ func _box_select(from: Vector2, to: Vector2, additive: bool) -> void:
 
 func _pick_unit(screen_position: Vector2) -> UnitBase:
 	var best: UnitBase = null
-	var best_distance := 24.0
+	var best_distance := 12.0
 	for id in units_by_id:
 		var unit: UnitBase = units_by_id[id]
 		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id != 0:
@@ -439,13 +439,24 @@ func _issue_defense_line(start: Vector3, finish: Vector3) -> void:
 	var midpoint := flat_start.lerp(flat_finish, 0.5)
 	var line_facing := _line_facing(midpoint, perpendicular)
 	var count := selected_units.size()
+	var average_radius := 0.0
+	for unit in selected_units:
+		if is_instance_valid(unit):
+			average_radius += unit.radius
+	average_radius /= maxf(float(count), 1.0)
+	var slot_width := maxf(average_radius * 3.0, 0.16)
+	var max_columns := maxi(1, int(floor(segment.length() / slot_width)))
+	var row_spacing := maxf(average_radius * 3.0, 0.18)
 	var tick := Engine.get_process_frames()
 	for i in range(count):
 		var unit: UnitBase = selected_units[i]
 		if not is_instance_valid(unit):
 			continue
-		var t := 0.5 if count == 1 else float(i) / float(count - 1)
-		var target := flat_start.lerp(flat_finish, t)
+		var row := int(i / max_columns)
+		var column := i % max_columns
+		var units_in_row := mini(max_columns, count - row * max_columns)
+		var t := 0.5 if units_in_row == 1 else float(column) / float(units_in_row - 1)
+		var target := flat_start.lerp(flat_finish, t) - line_facing * row_spacing * float(row)
 		var command := Command.new()
 		command.type = &"move"
 		command.player_id = 0

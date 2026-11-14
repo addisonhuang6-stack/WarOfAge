@@ -9,6 +9,9 @@ extends Node3D
 
 ## 存活单位注册表，用于索敌与单位间推挤。
 static var registry: Array[UnitBase] = []
+static var _separation_grid: Dictionary = {}
+static var _separation_frame: int = -1
+const SEPARATION_CELL_SIZE := 0.25
 
 var data: UnitData
 var player_id: int = -1
@@ -94,8 +97,7 @@ func _physics_process(delta: float) -> void:
 						_attack(current_target)
 				else:
 					current_target = null
-		if not move_points.is_empty():
-			_apply_separation(delta)
+		_apply_separation(delta)
 
 	_update_marker_rotation()
 
@@ -323,18 +325,69 @@ func _move_position(delta: float, target: Vector3) -> void:
 
 
 func _apply_separation(delta: float) -> void:
+	_ensure_separation_grid()
+	var center := _grid_cell(global_position)
 	var push := Vector3.ZERO
-	for unit in registry:
-		if unit == self or unit.hp <= 0.0:
-			continue
-		var distance := horizontal_distance_to(unit)
-		var min_distance := radius + unit.radius
-		if distance > 0.001 and distance < min_distance:
-			var away := Vector3(global_position.x - unit.global_position.x, 0.0, global_position.z - unit.global_position.z)
-			push += away.normalized() * (min_distance - distance)
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var bucket_value: Variant = _separation_grid.get(Vector2i(center.x + dx, center.y + dz))
+			if not (bucket_value is Array):
+				continue
+			var bucket: Array = bucket_value
+			for other_value in bucket:
+				if not (other_value is UnitBase):
+					continue
+				var other: UnitBase = other_value
+				if other == self or not is_instance_valid(other) or other.hp <= 0.0:
+					continue
+				var away := Vector3(
+					global_position.x - other.global_position.x,
+					0.0,
+					global_position.z - other.global_position.z
+				)
+				var distance := away.length()
+				var min_distance := radius + other.radius + 0.005
+				if distance >= min_distance:
+					continue
+				if distance < 0.0001:
+					var angle := float((instance_id * 37 + other.instance_id * 11) % 360) * PI / 180.0
+					away = Vector3(cos(angle), 0.0, sin(angle))
+					distance = 0.0001
+				push += away.normalized() * (min_distance - distance)
 	if push != Vector3.ZERO:
 		var strength: float = float(data.get_stat(&"separation_strength", 2.0))
 		global_position += push * minf(strength * delta, 1.0)
+
+
+static func _ensure_separation_grid() -> void:
+	var frame := Engine.get_physics_frames()
+	if frame == _separation_frame:
+		return
+	_separation_frame = frame
+	_separation_grid.clear()
+	for unit in registry:
+		if not is_instance_valid(unit) or unit.hp <= 0.0:
+			continue
+		var cell := _grid_cell(unit.global_position)
+		var bucket: Array = _separation_grid.get(cell, [])
+		bucket.append(unit)
+		_separation_grid[cell] = bucket
+
+
+static func _grid_cell(position: Vector3) -> Vector2i:
+	return Vector2i(floori(position.x / SEPARATION_CELL_SIZE), floori(position.z / SEPARATION_CELL_SIZE))
+
+
+static func _closest_point_on_segment(point: Vector3, a: Vector3, b: Vector3) -> Vector3:
+	var p := Vector2(point.x, point.z)
+	var pa := Vector2(a.x, a.z)
+	var pb := Vector2(b.x, b.z)
+	var ab := pb - pa
+	var length_squared := ab.length_squared()
+	if length_squared <= 0.000001:
+		return Vector3(pa.x, 0.0, pa.y)
+	var t := clampf((p - pa).dot(ab) / length_squared, 0.0, 1.0)
+	return Vector3(pa.x + ab.x * t, 0.0, pa.y + ab.y * t)
 
 
 func _start_charge() -> void:
@@ -367,8 +420,9 @@ func _process_charge(delta: float) -> void:
 	if flat_facing.length() < 0.001:
 		flat_facing = Vector3.RIGHT
 	flat_facing = flat_facing.normalized()
+	var previous_position := global_position
 	global_position += flat_facing * _charge_speed * delta
-	_handle_charge_collisions(flat_facing)
+	_handle_charge_collisions(flat_facing, previous_position)
 
 	_dust_timer -= delta
 	if _dust_timer <= 0.0:
@@ -379,25 +433,31 @@ func _process_charge(delta: float) -> void:
 		_cancel_charge()
 
 
-func _handle_charge_collisions(flat_facing: Vector3) -> void:
-	var reach := radius + 0.6
+func _handle_charge_collisions(flat_facing: Vector3, from: Vector3) -> void:
+	var to := global_position
 	for unit in registry:
 		if unit == self or not is_instance_valid(unit) or unit.hp <= 0.0:
 			continue
-		var offset := Vector3(unit.global_position.x - global_position.x, 0.0, unit.global_position.z - global_position.z)
+		var closest := _closest_point_on_segment(unit.global_position, from, to)
+		var offset := Vector3(unit.global_position.x - closest.x, 0.0, unit.global_position.z - closest.z)
 		var distance := offset.length()
-		if distance > reach or distance < 0.001:
+		if distance > radius + unit.radius + 0.03:
 			continue
-		if offset.normalized().dot(flat_facing) < 0.15:
+		var from_to_unit := Vector3(unit.global_position.x - from.x, 0.0, unit.global_position.z - from.z)
+		if from_to_unit.dot(flat_facing) < -0.05:
 			continue
 		if _charge_hits.has(unit.instance_id):
+			continue
+		if unit.is_charging:
 			continue
 
 		if unit.player_id == player_id:
 			_charge_hits[unit.instance_id] = true
 			var side := Vector3(-flat_facing.z, 0.0, flat_facing.x)
 			var side_sign := 1.0 if offset.dot(side) >= 0.0 else -1.0
-			var dodge := float(data.get_stat(&"charge_friendly_dodge", 1.6))
+			if absf(offset.dot(side)) < 0.0001:
+				side_sign = 1.0 if unit.instance_id % 2 == 0 else -1.0
+			var dodge := float(data.get_stat(&"charge_friendly_dodge", 0.35))
 			unit.move_points.clear()
 			unit.move_points.append(Vector3(
 				unit.global_position.x + side.x * side_sign * dodge,
@@ -412,8 +472,9 @@ func _handle_charge_collisions(flat_facing: Vector3) -> void:
 			continue
 		_charge_hits[unit.instance_id] = true
 		var push_scale := float(data.get_stat(&"charge_push_scale", 0.16))
-		var push_distance := clampf((_charge_speed - target_toughness) * push_scale, 0.35, 2.4)
-		unit.global_position += offset.normalized() * push_distance
+		var push_distance := clampf((_charge_speed - target_toughness) * push_scale, 0.15, 0.8)
+		var push_direction := offset.normalized() if offset.length() > 0.001 else flat_facing
+		unit.global_position += push_direction * push_distance
 		_charge_loss += target_toughness
 		_charge_speed = maxf(_charge_speed - target_toughness, 0.0)
 		EventBus.charge_dust.emit(Vector3(unit.global_position.x, 0.02, unit.global_position.z))

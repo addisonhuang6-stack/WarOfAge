@@ -10,7 +10,7 @@
 		"min_damage": 1,
 		"speed": 4.2,
 		"radius": 0.07,
-		"attack_range": 1.5,
+		"attack_range": 0.18,
 		"attack_interval": 1.1,
 		"aggro_range": 6.0,
 		"counter_tags": [],
@@ -20,8 +20,8 @@
 		"charge_max_speed": 14.0,
 		"charge_duration": 4.0,
 		"charge_max_duration": 7.0,
-		"charge_push_scale": 0.16,
-		"charge_friendly_dodge": 1.6
+		"charge_push_scale": 0.06,
+		"charge_friendly_dodge": 0.35
 	},
 	"texture": "res://assets/units/light_cavalry.png"
 }
