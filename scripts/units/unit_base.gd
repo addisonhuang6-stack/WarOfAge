@@ -33,6 +33,9 @@ var hold_facing: Vector3 = Vector3.ZERO
 ## 当前攻击目标；为 null 时按索敌规则自动寻找。
 var current_target: UnitBase = null
 
+## 自动奋战吸附的敌人；同一时刻只锁定一个。
+var melee_target: UnitBase = null
+
 ## 是否正在冲锋。
 var is_charging: bool = false
 
@@ -81,7 +84,14 @@ func _physics_process(delta: float) -> void:
 	if is_charging:
 		_process_charge(delta)
 	else:
-		if not move_points.is_empty():
+		if melee_target != null and (not is_instance_valid(melee_target) or melee_target.hp <= 0.0):
+			melee_target = null
+			current_target = null
+		if melee_target == null:
+			_try_engage_enemy()
+		if melee_target != null:
+			_process_melee(delta)
+		elif not move_points.is_empty():
 			current_target = null
 			_follow_path(delta)
 		else:
@@ -111,6 +121,7 @@ func receive_command(command: Command) -> void:
 	match command.type:
 		&"move":
 			_cancel_charge()
+			melee_target = null
 			current_target = null
 			move_points.clear()
 			hold_facing = Vector3.ZERO
@@ -289,10 +300,15 @@ func _is_target_engageable(target: UnitBase) -> bool:
 
 func _attack(target: UnitBase) -> void:
 	var flat_to_target := Vector3(target.global_position.x - global_position.x, 0.0, target.global_position.z - global_position.z)
-	if flat_to_target.length() > 0.001:
+	var hold_facing := _holds_facing_in_combat()
+	var facing_before := facing
+	if not hold_facing and flat_to_target.length() > 0.001:
 		facing = flat_to_target.normalized()
+	var attack_facing := facing_before if hold_facing else facing
 	var is_counter: bool = CombatSystem.counter_multiplier(data, target.data) > 1.0
-	var damage: float = CombatSystem.compute_damage(data, target.data, global_position, target.global_position, target.facing)
+	var damage: float = CombatSystem.compute_damage(
+		data, target.data, global_position, target.global_position, target.facing, attack_facing
+	)
 	target.take_damage(damage, self)
 	EventBus.unit_attacked.emit(self, target, damage, is_counter)
 	_attack_cooldown = float(data.get_stat(&"attack_interval", 1.0))
@@ -312,14 +328,91 @@ func _acquire_target() -> void:
 	current_target = best
 
 
-func _move_position(delta: float, target: Vector3) -> void:
+func _holds_facing_in_combat() -> bool:
+	return data != null and bool(data.get_stat(&"hold_facing_in_combat", false))
+
+
+func _can_engage(target: UnitBase) -> bool:
+	if target == null or target.data == null:
+		return false
+	var tags: Array = data.get_stat(&"engage_tags", [])
+	if tags.is_empty():
+		return true
+	for tag in tags:
+		if target.data.has_tag(StringName(tag)):
+			return true
+	return false
+
+
+func _try_engage_enemy() -> void:
+	if data == null or hp <= 0.0:
+		return
+	var engage_radius := float(data.get_stat(&"engage_radius", 0.4))
+	if engage_radius <= 0.0:
+		return
+	_ensure_separation_grid()
+	var center := _grid_cell(global_position)
+	var best: UnitBase = null
+	var best_score := INF
+	for dx in range(-2, 3):
+		for dz in range(-2, 3):
+			var bucket_value: Variant = _separation_grid.get(Vector2i(center.x + dx, center.y + dz))
+			if not (bucket_value is Array):
+				continue
+			var bucket: Array = bucket_value
+			for other_value in bucket:
+				if not (other_value is UnitBase):
+					continue
+				var other: UnitBase = other_value
+				if other == self or not is_instance_valid(other) or other.hp <= 0.0:
+					continue
+				if other.player_id == player_id or not _can_engage(other):
+					continue
+				var distance := horizontal_distance_to(other)
+				if distance > engage_radius:
+					continue
+				var score := distance
+				if other.melee_target != null and other.melee_target != self:
+					score += engage_radius
+				if score < best_score:
+					best = other
+					best_score = score
+	if best == null:
+		return
+	melee_target = best
+	current_target = best
+	move_points.clear()
+	hold_facing = Vector3.ZERO
+
+
+func _process_melee(delta: float) -> void:
+	if melee_target == null or not is_instance_valid(melee_target) or melee_target.hp <= 0.0:
+		melee_target = null
+		current_target = null
+		return
+	var leash := float(data.get_stat(&"leash_radius", 0.9))
+	var distance := horizontal_distance_to(melee_target)
+	if distance > leash:
+		melee_target = null
+		current_target = null
+		return
+	var attack_range := float(data.get_stat(&"attack_range", 0.0))
+	if distance <= attack_range:
+		if _attack_cooldown <= 0.0:
+			_attack(melee_target)
+	else:
+		_move_position(delta, melee_target.global_position, not _holds_facing_in_combat())
+
+
+func _move_position(delta: float, target: Vector3, rotate_facing: bool = true) -> void:
 	var from := Vector3(global_position.x, 0.0, global_position.z)
 	var to := Vector3(target.x, 0.0, target.z)
 	var offset := to - from
 	if offset.length() <= 0.001:
 		return
 	var direction := offset.normalized()
-	facing = direction
+	if rotate_facing:
+		facing = direction
 	var step := _speed * delta
 	global_position = from + direction * minf(step, offset.length())
 
@@ -394,6 +487,7 @@ func _start_charge() -> void:
 	var max_speed := float(data.get_stat(&"charge_max_speed", 0.0))
 	if max_speed <= 0.0:
 		return
+	melee_target = null
 	current_target = null
 	move_points.clear()
 	hold_facing = Vector3.ZERO

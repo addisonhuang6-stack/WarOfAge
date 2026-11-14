@@ -19,7 +19,12 @@
 		"toughness": 4.0,
 		"directional_armor": true,
 		"rear_armor_multiplier": 0.3,
-		"flank_armor_multiplier": 0.6
+		"flank_armor_multiplier": 0.6,
+		"engage_radius": 0.4,
+		"leash_radius": 0.9,
+		"engage_tags": ["infantry"],
+		"hold_facing_in_combat": true,
+		"side_back_attack_multiplier": 0.3
 	},
 	"texture": "res://assets/units/spearman.png"
 }

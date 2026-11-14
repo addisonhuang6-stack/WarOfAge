@@ -21,7 +21,11 @@
 		"charge_duration": 4.0,
 		"charge_max_duration": 7.0,
 		"charge_push_scale": 0.06,
-		"charge_friendly_dodge": 0.35
+		"charge_friendly_dodge": 0.35,
+		"engage_radius": 0.45,
+		"leash_radius": 1.2,
+		"engage_tags": [],
+		"hold_facing_in_combat": false
 	},
 	"texture": "res://assets/units/light_cavalry.png"
 }

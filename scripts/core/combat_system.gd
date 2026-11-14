@@ -12,14 +12,36 @@ static func compute_damage(
 	target: UnitData,
 	attacker_position: Vector3 = Vector3.ZERO,
 	target_position: Vector3 = Vector3.ZERO,
-	target_facing: Vector3 = Vector3.ZERO
+	target_facing: Vector3 = Vector3.ZERO,
+	attacker_facing: Vector3 = Vector3.ZERO
 ) -> float:
 	var attack: float = float(attacker.get_stat(&"attack", 0.0))
+	attack *= attack_direction_multiplier(attacker, attacker_position, target_position, attacker_facing)
 	var armor: float = float(target.get_stat(&"armor", 0.0))
 	armor *= directional_armor_multiplier(target, attacker_position, target_position, target_facing)
 	var min_damage: float = float(attacker.get_stat(&"min_damage", 0.0))
 	var damage := attack * counter_multiplier(attacker, target) - armor
 	return maxf(damage, min_damage)
+
+
+## 从侧面或背后发起攻击时的伤害倍率（长矛兵为 0.3，即伤害减少 70%）。
+static func attack_direction_multiplier(
+	attacker: UnitData,
+	attacker_position: Vector3,
+	target_position: Vector3,
+	attacker_facing: Vector3
+) -> float:
+	var penalty := float(attacker.get_stat(&"side_back_attack_multiplier", 0.0))
+	if penalty <= 0.0 or attacker_facing.length() < 0.001:
+		return 1.0
+	var to_target := Vector3(target_position.x - attacker_position.x, 0.0, target_position.z - attacker_position.z)
+	if to_target.length() < 0.001:
+		return 1.0
+	var flat_facing := Vector3(attacker_facing.x, 0.0, attacker_facing.z)
+	if flat_facing.length() < 0.001:
+		return 1.0
+	var dot := flat_facing.normalized().dot(to_target.normalized())
+	return penalty if dot < 0.5 else 1.0
 
 
 ## 方向护甲：背后受击护甲 -70%，侧面受击护甲 -40%（只对配置了该规则的单位生效）。

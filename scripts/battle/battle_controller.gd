@@ -79,7 +79,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_ai_timer -= delta
 	if _ai_timer <= 0.0:
-		_ai_timer = 0.5
+		_ai_timer = 1.2
 		_enemy_ai_step()
 
 
@@ -345,21 +345,37 @@ func _pan_camera(screen_delta: Vector2) -> void:
 func _issue_move(points: Array[Vector3]) -> void:
 	if points.is_empty() or selected_units.is_empty():
 		return
-	var unit_ids: Array[int] = []
-	for unit in selected_units:
-		if is_instance_valid(unit):
-			unit_ids.append(unit.instance_id)
-	if unit_ids.is_empty():
+	_issue_move_for_units(selected_units, points, 0)
+
+
+## 为每个单位生成带自身阵型偏移的移动命令，转弯时保持相对队列。
+func _issue_move_for_units(units: Array[UnitBase], points: Array[Vector3], command_player_id: int) -> void:
+	if points.is_empty() or units.is_empty():
 		return
-	# 一次移动令只发一条 Command，携带完整划线路径；新令可整体覆盖旧路径。
-	var command := Command.new()
-	command.type = &"move"
-	command.player_id = 0
-	command.unit_ids = unit_ids
-	command.waypoints.assign(points)
-	command.target_position = points.back()
-	command.tick = Engine.get_process_frames()
-	EventBus.command_issued.emit(command)
+	var valid_units: Array[UnitBase] = []
+	var centroid := Vector3.ZERO
+	for unit in units:
+		if is_instance_valid(unit) and unit.hp > 0.0:
+			valid_units.append(unit)
+			centroid += unit.global_position
+	if valid_units.is_empty():
+		return
+	centroid /= float(valid_units.size())
+	var tick := Engine.get_process_frames()
+	for unit in valid_units:
+		var offset := Vector3(unit.global_position.x - centroid.x, 0.0, unit.global_position.z - centroid.z)
+		var waypoints: Array[Vector3] = []
+		for point in points:
+			waypoints.append(Vector3(point.x + offset.x, 0.0, point.z + offset.z))
+		var command := Command.new()
+		command.type = &"move"
+		command.player_id = command_player_id
+		command.unit_ids.assign([unit.instance_id])
+		command.waypoints.assign(waypoints)
+		command.target_position = waypoints.back()
+		command.tick = tick
+		tick += 1
+		EventBus.command_issued.emit(command)
 
 
 func _issue_charge() -> void:
@@ -794,32 +810,29 @@ func _on_unit_attacked(_attacker: UnitBase, target: UnitBase, damage: float, is_
 
 
 func _enemy_ai_step() -> void:
+	var enemies: Array[UnitBase] = []
 	var players: Array[UnitBase] = []
 	for id in units_by_id:
 		var unit: UnitBase = units_by_id[id]
-		if is_instance_valid(unit) and unit.player_id == 0 and unit.hp > 0.0:
+		if not is_instance_valid(unit) or unit.hp <= 0.0:
+			continue
+		if unit.player_id == 0:
 			players.append(unit)
-	if players.is_empty():
+		elif unit.melee_target == null and not unit.is_charging:
+			enemies.append(unit)
+	if enemies.is_empty() or players.is_empty():
 		return
-	for id in units_by_id:
-		var unit: UnitBase = units_by_id[id]
-		if not is_instance_valid(unit) or unit.player_id != 1 or unit.hp <= 0.0:
-			continue
-		if unit.current_target != null or not unit.move_points.is_empty():
-			continue
-		var nearest := players[0]
-		var nearest_distance := unit.horizontal_distance_to(nearest)
-		for candidate in players:
-			var distance := unit.horizontal_distance_to(candidate)
-			if distance < nearest_distance:
-				nearest = candidate
-				nearest_distance = distance
-		var aggro_range: float = float(unit.data.get_stat(&"aggro_range", 0.0))
-		if nearest_distance <= aggro_range * 2.0:
-			var command := Command.new()
-			command.type = &"move"
-			command.player_id = 1
-			command.unit_ids = [unit.instance_id]
-			command.target_position = nearest.global_position
-			command.tick = Engine.get_process_frames()
-			EventBus.command_issued.emit(command)
+	var centroid := Vector3.ZERO
+	for unit in enemies:
+		centroid += unit.global_position
+	centroid /= float(enemies.size())
+	var target := players[0]
+	var nearest_distance := Vector2(target.global_position.x - centroid.x, target.global_position.z - centroid.z).length()
+	for candidate in players:
+		var distance := Vector2(candidate.global_position.x - centroid.x, candidate.global_position.z - centroid.z).length()
+		if distance < nearest_distance:
+			target = candidate
+			nearest_distance = distance
+	if nearest_distance <= 0.6:
+		return
+	_issue_move_for_units(enemies, [Vector3(target.global_position.x, 0.0, target.global_position.z)], 1)
