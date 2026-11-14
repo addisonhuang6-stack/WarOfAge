@@ -46,6 +46,12 @@ var control_groups: Dictionary = {}
 var _drawing_defense_line: bool = false
 var _defense_line_start := Vector3.ZERO
 var _defense_line_current := Vector3.ZERO
+var _pressed_unit: UnitBase = null
+var _press_shift: bool = false
+var _selected_on_press: bool = false
+var _path_mesh: ImmediateMesh
+var _path_lines: MeshInstance3D
+var _path_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -64,6 +70,11 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_path_timer -= delta
+	if _path_timer <= 0.0:
+		_path_timer = 0.1
+		_update_path_lines()
+
 	if _battle_over or not _enemy_ai_enabled:
 		return
 	_ai_timer -= delta
@@ -107,6 +118,17 @@ func _setup_world() -> void:
 
 	_decor_root = Node3D.new()
 	add_child(_decor_root)
+
+	_path_lines = MeshInstance3D.new()
+	_path_mesh = ImmediateMesh.new()
+	_path_lines.mesh = _path_mesh
+	var path_material := StandardMaterial3D.new()
+	path_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	path_material.vertex_color_use_as_albedo = true
+	path_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	path_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_path_lines.material_override = path_material
+	add_child(_path_lines)
 
 
 func _setup_ui() -> void:
@@ -525,18 +547,25 @@ func _unhandled_input(event: InputEvent) -> void:
 func _handle_left_button(event: InputEventMouseButton) -> void:
 	if event.pressed:
 		_press_position = event.position
-		var unit := _pick_unit(event.position)
-		if unit != null:
-			if event.shift_pressed:
-				_toggle_select(unit)
-			else:
-				_select_single(unit)
+		_pressed_unit = _pick_unit(event.position)
+		_press_shift = event.shift_pressed
+		_selected_on_press = false
+
+		if (event.ctrl_pressed or event.meta_pressed) and not selected_units.is_empty() and _pressed_unit == null:
+			_drawing_defense_line = true
+			_defense_line_start = _mouse_to_ground(event.position)
+			_defense_line_current = _defense_line_start
 		else:
-			if (event.ctrl_pressed or event.meta_pressed) and not selected_units.is_empty():
-				_drawing_defense_line = true
-				_defense_line_start = _mouse_to_ground(event.position)
-				_defense_line_current = _defense_line_start
-			elif not selected_units.is_empty():
+			# 无选择时点击单位立即选中；已有选择时，点击留到松手再判定，
+			# 这样按住左键直接从单位身上拖线也能下达移动命令。
+			if _pressed_unit != null and selected_units.is_empty():
+				if _press_shift:
+					_toggle_select(_pressed_unit)
+				else:
+					_select_single(_pressed_unit)
+				_selected_on_press = true
+
+			if not selected_units.is_empty():
 				_drawing_path = true
 				_drag_path_world.clear()
 				_path_preview.clear()
@@ -553,11 +582,24 @@ func _handle_left_button(event: InputEventMouseButton) -> void:
 		if _drawing_defense_line:
 			_drawing_defense_line = false
 			_issue_defense_line(_defense_line_start, _defense_line_current)
+			_pressed_unit = null
 		elif _drawing_path:
 			_drawing_path = false
-			_issue_move(_drag_path_world)
+			if _press_position.distance_to(event.position) <= 5.0:
+				if not _selected_on_press:
+					if _pressed_unit != null:
+						if _press_shift:
+							_toggle_select(_pressed_unit)
+						else:
+							_select_single(_pressed_unit)
+					else:
+						_clear_selection()
+			else:
+				_issue_move(_drag_path_world)
 			_drag_path_world.clear()
 			_path_preview.clear()
+			_pressed_unit = null
+			_selected_on_press = false
 		elif _box_selecting:
 			_box_selecting = false
 			if _press_position.distance_to(event.position) > 5.0:
@@ -621,6 +663,38 @@ func _draw_dashed(points: PackedVector2Array, color: Color, width: float) -> voi
 			var end := minf(travelled + dash, length)
 			selection_box.draw_line(from + direction * travelled, from + direction * end, color, width)
 			travelled += dash + gap
+
+
+func _update_path_lines() -> void:
+	if _path_mesh == null:
+		return
+	_path_mesh.clear_surfaces()
+	var has_paths := false
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if is_instance_valid(unit) and unit.hp > 0.0 and unit.player_id == 0 and not unit.move_points.is_empty():
+			has_paths = true
+			break
+	if not has_paths:
+		return
+	_path_mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id != 0 or unit.move_points.is_empty():
+			continue
+		var points: Array[Vector3] = []
+		points.append(Vector3(unit.global_position.x, 0.06, unit.global_position.z))
+		for point in unit.move_points:
+			points.append(Vector3(point.x, 0.06, point.z))
+		var color := Color(0.45, 0.45, 0.45, 0.65)
+		if unit.is_selected:
+			color = Color(1.0, 0.85, 0.3, 0.9)
+		for i in range(points.size() - 1):
+			_path_mesh.surface_set_color(color)
+			_path_mesh.surface_add_vertex(points[i])
+			_path_mesh.surface_set_color(color)
+			_path_mesh.surface_add_vertex(points[i + 1])
+	_path_mesh.surface_end()
 
 
 func _update_hud() -> void:
