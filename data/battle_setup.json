@@ -1,0 +1,11 @@
+{
+	"enemy_ai": false,
+	"player": [
+		{ "type": "spearman", "count": 6, "origin": [-6.0, 0.0, -3.0], "direction": [0.0, 0.0, 1.0], "step": 1.2 },
+		{ "type": "light_cavalry", "count": 4, "origin": [-7.6, 0.0, -2.4], "direction": [0.0, 0.0, 1.0], "step": 1.5 }
+	],
+	"enemy": [
+		{ "type": "light_cavalry", "count": 6, "origin": [6.0, 0.0, -3.0], "direction": [0.0, 0.0, 1.0], "step": 1.5 },
+		{ "type": "spearman", "count": 4, "origin": [7.6, 0.0, -2.4], "direction": [0.0, 0.0, 1.0], "step": 1.3 }
+	]
+}

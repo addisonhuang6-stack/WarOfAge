@@ -1,0 +1,20 @@
+{
+	"id": "spearman",
+	"name": "长矛兵",
+	"tags": ["infantry", "anti_cavalry", "melee"],
+	"stats": {
+		"hp": 140,
+		"attack": 14,
+		"armor": 2,
+		"min_damage": 1,
+		"speed": 1.26,
+		"radius": 0.55,
+		"attack_range": 1.6,
+		"attack_interval": 1.2,
+		"aggro_range": 5.0,
+		"counter_tags": ["cavalry"],
+		"counter_multiplier": 2.0,
+		"separation_strength": 2.0
+	},
+	"texture": "res://assets/units/spearman.png"
+}

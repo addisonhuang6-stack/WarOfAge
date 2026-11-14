@@ -1,0 +1,562 @@
+class_name BattleController
+extends Node3D
+## 单机战斗场景控制器：搭建世界与 UI、生成双方单位、处理玩家输入、驱动敌方 AI。
+## 所有玩家操作（移动）都封装为 Command，经 EventBus 下发（命令模式）。
+
+const SETUP_PATH := "res://data/battle_setup.json"
+const UNIT_DATA_DIR := "res://data/units/"
+const CAMERA_ZOOM_MIN := 3.0
+const CAMERA_ZOOM_MAX := 14.0
+const CAMERA_BOUNDS_MIN := Vector2(-9.0, -6.0)
+const CAMERA_BOUNDS_MAX := Vector2(9.0, 6.0)
+
+var camera: Camera3D
+var canvas_layer: CanvasLayer
+var selection_box: Control
+var instruction_label: Label
+var status_label: Label
+var map_label: Label
+var result_label: Label
+var return_hint_label: Label
+var ui_font: SystemFont
+var environment: Environment
+var ground_mesh: MeshInstance3D
+var current_map: Dictionary = {}
+var _decor_root: Node3D
+
+var unit_types: Dictionary = {}
+var units_by_id: Dictionary = {}
+var selected_units: Array[UnitBase] = []
+var next_unit_id: int = 0
+
+var _drawing_path: bool = false
+var _path_preview: PackedVector2Array = PackedVector2Array()
+var _drag_path_world: Array[Vector3] = []
+var _box_selecting: bool = false
+var _box_select_start: Vector2 = Vector2.ZERO
+var _box_select_current: Vector2 = Vector2.ZERO
+var _box_shift: bool = false
+var _press_position: Vector2 = Vector2.ZERO
+var _panning: bool = false
+var _enemy_ai_enabled: bool = false
+var _ai_timer: float = 0.5
+var _battle_over: bool = false
+var _battle_result: int = -1
+
+
+func _ready() -> void:
+	_setup_world()
+	_setup_ui()
+	_load_unit_data()
+	_spawn_armies()
+	_apply_map()
+
+	EventBus.unit_died.connect(_on_unit_died)
+	EventBus.unit_attacked.connect(_on_unit_attacked)
+	EventBus.battle_ended.connect(_on_battle_ended)
+
+	_update_hud()
+
+
+func _physics_process(delta: float) -> void:
+	if _battle_over or not _enemy_ai_enabled:
+		return
+	_ai_timer -= delta
+	if _ai_timer <= 0.0:
+		_ai_timer = 0.5
+		_enemy_ai_step()
+
+
+func _setup_world() -> void:
+	camera = Camera3D.new()
+	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+	camera.size = 7.5
+	camera.position = Vector3(0.0, 10.0, 0.0)
+	camera.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	add_child(camera)
+
+	var light := DirectionalLight3D.new()
+	light.rotation_degrees = Vector3(-65.0, -35.0, 0.0)
+	add_child(light)
+
+	environment = Environment.new()
+	environment.background_mode = Environment.BG_COLOR
+	environment.background_color = Color(0.11, 0.12, 0.13)
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	environment.ambient_light_color = Color(0.85, 0.85, 0.85)
+	environment.ambient_light_energy = 0.7
+	var world_env := WorldEnvironment.new()
+	world_env.environment = environment
+	add_child(world_env)
+
+	ground_mesh = MeshInstance3D.new()
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(28.0, 18.0)
+	var material := StandardMaterial3D.new()
+	material.albedo_texture = load("res://assets/ground.png")
+	material.texture_repeat = true
+	material.uv1_scale = Vector3(14.0, 9.0, 1.0)
+	ground_mesh.mesh = plane
+	ground_mesh.material_override = material
+	add_child(ground_mesh)
+
+	_decor_root = Node3D.new()
+	add_child(_decor_root)
+
+
+func _setup_ui() -> void:
+	canvas_layer = CanvasLayer.new()
+	add_child(canvas_layer)
+
+	selection_box = Control.new()
+	selection_box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	selection_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	selection_box.draw.connect(_draw_selection_box)
+	canvas_layer.add_child(selection_box)
+
+	ui_font = SystemFont.new()
+	ui_font.font_names = PackedStringArray(["PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Helvetica"])
+
+	instruction_label = _make_label(Vector2(12.0, 10.0), 18)
+	instruction_label.text = GameSettings.t("battle.instructions")
+
+	var counter_label := _make_label(Vector2(12.0, 34.0), 16)
+	counter_label.text = GameSettings.t("battle.counter")
+	counter_label.modulate = Color(1.0, 0.85, 0.4)
+
+	status_label = _make_label(Vector2(12.0, 58.0), 16)
+	map_label = _make_label(Vector2(12.0, 82.0), 16)
+	map_label.modulate = Color(0.72, 0.84, 1.0)
+	result_label = _make_label(Vector2(12.0, 112.0), 30)
+	result_label.visible = false
+	return_hint_label = _make_label(Vector2(12.0, 152.0), 17)
+	return_hint_label.text = GameSettings.t("battle.return_hint")
+	return_hint_label.modulate = Color(0.8, 0.86, 0.9)
+	return_hint_label.visible = false
+
+
+func _make_label(position: Vector2, font_size: int) -> Label:
+	var label := Label.new()
+	label.position = position
+	label.add_theme_font_override("font", ui_font)
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", Color(0.92, 0.94, 0.96))
+	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.75))
+	label.add_theme_constant_override("outline_size", 4)
+	canvas_layer.add_child(label)
+	return label
+
+
+func _load_unit_data() -> void:
+	var dir := DirAccess.open(UNIT_DATA_DIR)
+	if dir == null:
+		push_error("无法读取单位数据目录 %s" % UNIT_DATA_DIR)
+		return
+	for file_name in dir.get_files():
+		if not file_name.ends_with(".json"):
+			continue
+		var unit_data := UnitData.load_from_file(UNIT_DATA_DIR + file_name)
+		if unit_data != null:
+			unit_types[String(unit_data.id)] = unit_data
+
+
+func _spawn_armies() -> void:
+	var file := FileAccess.open(SETUP_PATH, FileAccess.READ)
+	if file == null:
+		push_error("无法读取战斗配置 %s" % SETUP_PATH)
+		return
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	if not (parsed is Dictionary):
+		push_error("战斗配置不是有效的 JSON 对象")
+		return
+	_enemy_ai_enabled = bool(parsed.get("enemy_ai", false))
+	_spawn_groups(parsed.get("player", []), 0)
+	_spawn_groups(parsed.get("enemy", []), 1)
+
+
+func _spawn_groups(groups: Variant, team_id: int) -> void:
+	if not (groups is Array):
+		return
+	for group in groups:
+		if not (group is Dictionary):
+			continue
+		var type_name := str(group.get("type", ""))
+		var count := int(group.get("count", 0))
+		if count <= 0 or not unit_types.has(type_name):
+			continue
+		var origin_data: Array = group.get("origin", [0.0, 0.0, 0.0])
+		var direction_data: Array = group.get("direction", [0.0, 0.0, 1.0])
+		var step := float(group.get("step", 1.0))
+		var origin := Vector3(float(origin_data[0]), 0.0, float(origin_data[2]))
+		var direction := Vector3(float(direction_data[0]), 0.0, float(direction_data[2])).normalized()
+		for i in range(count):
+			_spawn_unit(type_name, team_id, origin + direction * (step * float(i)))
+
+
+func _spawn_unit(type_name: String, team_id: int, position: Vector3) -> void:
+	var unit := UnitBase.new()
+	unit.data = unit_types[type_name]
+	unit.player_id = team_id
+	unit.instance_id = next_unit_id
+	next_unit_id += 1
+	unit.position = position
+	add_child(unit)
+	units_by_id[unit.instance_id] = unit
+
+
+func _apply_map() -> void:
+	var generator := MapGenerator.new()
+	generator.load_maps()
+	current_map = generator.pick_map(GameSettings.selected_map)
+	if current_map.is_empty():
+		return
+	generator.apply(current_map, ground_mesh, environment, _decor_root, randi())
+	if map_label != null:
+		map_label.text = _localized_map_text()
+
+
+func _localized_map_text() -> String:
+	if current_map.is_empty():
+		return ""
+	var names: Variant = current_map.get("name", {})
+	var map_name := str(current_map.get("id", ""))
+	if names is Dictionary:
+		var name_dict: Dictionary = names
+		map_name = str(name_dict.get(GameSettings.language, name_dict.get("en", map_name)))
+	return GameSettings.t("battle.map") % map_name
+
+
+func _select_single(unit: UnitBase) -> void:
+	selected_units = [unit]
+	_refresh_selection()
+
+
+func _toggle_select(unit: UnitBase) -> void:
+	if unit in selected_units:
+		selected_units.erase(unit)
+	else:
+		selected_units.append(unit)
+	_refresh_selection()
+
+
+func _clear_selection() -> void:
+	selected_units.clear()
+	_refresh_selection()
+
+
+func _refresh_selection() -> void:
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if is_instance_valid(unit):
+			unit.is_selected = unit in selected_units
+	EventBus.selection_changed.emit(selected_units.size())
+	_update_hud()
+
+
+func _box_select(from: Vector2, to: Vector2, additive: bool) -> void:
+	var rect := Rect2(from, to - from).abs()
+	var found: Array[UnitBase] = []
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id != 0:
+			continue
+		var center := camera.unproject_position(unit.global_position + Vector3(0.0, unit.radius * 1.05, 0.0))
+		if rect.has_point(center):
+			found.append(unit)
+	if additive:
+		for unit in found:
+			if not (unit in selected_units):
+				selected_units.append(unit)
+	else:
+		selected_units = found
+	_refresh_selection()
+
+
+func _pick_unit(screen_position: Vector2) -> UnitBase:
+	var best: UnitBase = null
+	var best_distance := 24.0
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.hp <= 0.0 or unit.player_id != 0:
+			continue
+		var center := camera.unproject_position(unit.global_position + Vector3(0.0, unit.radius * 1.05, 0.0))
+		var distance := screen_position.distance_to(center)
+		if distance < best_distance:
+			best = unit
+			best_distance = distance
+	return best
+
+
+func _mouse_to_ground(screen_position: Vector2) -> Vector3:
+	var origin := camera.project_ray_origin(screen_position)
+	var direction := camera.project_ray_normal(screen_position)
+	if absf(direction.y) < 0.0001:
+		return Vector3.ZERO
+	var t := -origin.y / direction.y
+	return origin + direction * t
+
+
+func _zoom_camera(factor: float) -> void:
+	camera.size = clampf(camera.size * factor, CAMERA_ZOOM_MIN, CAMERA_ZOOM_MAX)
+
+
+func _pan_camera(screen_delta: Vector2) -> void:
+	var viewport_height := maxf(get_viewport().get_visible_rect().size.y, 1.0)
+	var units_per_pixel := camera.size * 2.0 / viewport_height
+	camera.position += Vector3(-screen_delta.x, 0.0, -screen_delta.y) * units_per_pixel
+	camera.position.x = clampf(camera.position.x, CAMERA_BOUNDS_MIN.x, CAMERA_BOUNDS_MAX.x)
+	camera.position.z = clampf(camera.position.z, CAMERA_BOUNDS_MIN.y, CAMERA_BOUNDS_MAX.y)
+
+
+func _issue_move(points: Array[Vector3]) -> void:
+	if points.is_empty() or selected_units.is_empty():
+		return
+	var unit_ids: Array[int] = []
+	for unit in selected_units:
+		if is_instance_valid(unit):
+			unit_ids.append(unit.instance_id)
+	if unit_ids.is_empty():
+		return
+	# 一次移动令只发一条 Command，携带完整划线路径；新令可整体覆盖旧路径。
+	var command := Command.new()
+	command.type = &"move"
+	command.player_id = 0
+	command.unit_ids = unit_ids
+	command.waypoints.assign(points)
+	command.target_position = points.back()
+	command.tick = Engine.get_process_frames()
+	EventBus.command_issued.emit(command)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+			_return_to_world()
+		elif event.keycode == KEY_R:
+			get_tree().reload_current_scene()
+		elif event.keycode == KEY_ESCAPE:
+			_clear_selection()
+		return
+
+	# 视角缩放与平移：战斗结束后依然可用
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_zoom_camera(0.9)
+			return
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_zoom_camera(1.1)
+			return
+	if event is InputEventMagnifyGesture:
+		if event.factor > 0.0:
+			_zoom_camera(1.0 / event.factor)
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
+		_panning = event.pressed
+		return
+	if event is InputEventMouseMotion and _panning:
+		_pan_camera(event.relative)
+		return
+
+	if _battle_over:
+		return
+
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			_handle_left_button(event)
+		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			if not selected_units.is_empty():
+				_issue_move([_mouse_to_ground(event.position)])
+	elif event is InputEventMouseMotion:
+		_handle_motion(event)
+
+
+func _handle_left_button(event: InputEventMouseButton) -> void:
+	if event.pressed:
+		_press_position = event.position
+		var unit := _pick_unit(event.position)
+		if unit != null:
+			if event.shift_pressed:
+				_toggle_select(unit)
+			else:
+				_select_single(unit)
+		else:
+			if not selected_units.is_empty():
+				_drawing_path = true
+				_drag_path_world.clear()
+				_path_preview.clear()
+				var world := _mouse_to_ground(event.position)
+				_drag_path_world.append(world)
+				_path_preview.append(event.position)
+			else:
+				_box_selecting = true
+				_box_select_start = event.position
+				_box_select_current = event.position
+				_box_shift = event.shift_pressed
+		selection_box.queue_redraw()
+	else:
+		if _drawing_path:
+			_drawing_path = false
+			_issue_move(_drag_path_world)
+			_drag_path_world.clear()
+			_path_preview.clear()
+		elif _box_selecting:
+			_box_selecting = false
+			if _press_position.distance_to(event.position) > 5.0:
+				_box_select(_box_select_start, _box_select_current, _box_shift)
+			else:
+				_clear_selection()
+		selection_box.queue_redraw()
+
+
+func _handle_motion(event: InputEventMouseMotion) -> void:
+	if _drawing_path:
+		var world := _mouse_to_ground(event.position)
+		if _drag_path_world.is_empty() or _drag_path_world.back().distance_to(world) >= 0.7:
+			_drag_path_world.append(world)
+			_path_preview.append(event.position)
+		selection_box.queue_redraw()
+	elif _box_selecting:
+		_box_select_current = event.position
+		selection_box.queue_redraw()
+
+
+func _draw_selection_box() -> void:
+	if _box_selecting:
+		var rect := Rect2(_box_select_start, _box_select_current - _box_select_start).abs()
+		selection_box.draw_rect(rect, Color(0.35, 0.7, 1.0, 0.16), true)
+		selection_box.draw_rect(rect, Color(0.4, 0.75, 1.0, 0.9), false, 2.0)
+	if _drawing_path:
+		_draw_dashed(_path_preview, Color(1.0, 0.9, 0.4, 0.95), 3.0)
+
+
+func _draw_dashed(points: PackedVector2Array, color: Color, width: float) -> void:
+	if points.is_empty():
+		return
+	if points.size() == 1:
+		selection_box.draw_circle(points[0], width * 2.0, color)
+		return
+	var dash := 10.0
+	var gap := 8.0
+	for i in range(points.size() - 1):
+		var from := points[i]
+		var to := points[i + 1]
+		var segment := to - from
+		var length := segment.length()
+		if length <= 0.001:
+			continue
+		var direction := segment / length
+		var travelled := 0.0
+		while travelled < length:
+			var end := minf(travelled + dash, length)
+			selection_box.draw_line(from + direction * travelled, from + direction * end, color, width)
+			travelled += dash + gap
+
+
+func _update_hud() -> void:
+	var player_count := 0
+	var enemy_count := 0
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.hp <= 0.0:
+			continue
+		if unit.player_id == 0:
+			player_count += 1
+		else:
+			enemy_count += 1
+	status_label.text = GameSettings.t("battle.status") % [player_count, enemy_count, selected_units.size()]
+
+
+func _on_unit_died(unit: UnitBase) -> void:
+	selected_units.erase(unit)
+	units_by_id.erase(unit.instance_id)
+	EventBus.selection_changed.emit(selected_units.size())
+	_check_battle_end()
+	_update_hud()
+
+
+func _check_battle_end() -> void:
+	if _battle_over:
+		return
+	var player_alive := 0
+	var enemy_alive := 0
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.hp <= 0.0:
+			continue
+		if unit.player_id == 0:
+			player_alive += 1
+		else:
+			enemy_alive += 1
+	if player_alive == 0 or enemy_alive == 0:
+		_battle_over = true
+		EventBus.battle_ended.emit(0 if enemy_alive == 0 else 1)
+
+
+func _on_battle_ended(winner: int) -> void:
+	_battle_result = winner
+	if winner == 0:
+		result_label.text = GameSettings.t("battle.victory")
+		result_label.modulate = Color(1.0, 0.9, 0.35)
+	else:
+		result_label.text = GameSettings.t("battle.defeat")
+		result_label.modulate = Color(1.0, 0.45, 0.4)
+	result_label.visible = true
+	return_hint_label.visible = true
+
+
+func _return_to_world() -> void:
+	if not _battle_over:
+		return
+	WorldState.resolve_battle("player" if _battle_result == 0 else "enemy")
+	get_tree().change_scene_to_file("res://scenes/macro_map.tscn")
+
+
+func _on_unit_attacked(_attacker: UnitBase, target: UnitBase, damage: float, is_counter: bool) -> void:
+	var label := Label3D.new()
+	label.text = "%d%s" % [int(round(damage)), "!" if is_counter else ""]
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.font_size = 64
+	label.pixel_size = 0.012
+	label.outline_size = 8
+	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
+	label.modulate = Color(1.0, 0.82, 0.25) if is_counter else Color(1.0, 0.4, 0.35)
+	label.position = target.global_position + Vector3(0.0, target.radius * 2.0, 0.0)
+	label.position += Vector3(randf_range(-0.2, 0.2), 0.0, randf_range(-0.2, 0.2))
+	add_child(label)
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(label, "position:y", label.position.y + 0.9, 0.9)
+	tween.tween_property(label, "modulate:a", 0.0, 0.9)
+	tween.chain().tween_callback(label.queue_free)
+
+
+func _enemy_ai_step() -> void:
+	var players: Array[UnitBase] = []
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if is_instance_valid(unit) and unit.player_id == 0 and unit.hp > 0.0:
+			players.append(unit)
+	if players.is_empty():
+		return
+	for id in units_by_id:
+		var unit: UnitBase = units_by_id[id]
+		if not is_instance_valid(unit) or unit.player_id != 1 or unit.hp <= 0.0:
+			continue
+		if unit.current_target != null or not unit.move_points.is_empty():
+			continue
+		var nearest := players[0]
+		var nearest_distance := unit.horizontal_distance_to(nearest)
+		for candidate in players:
+			var distance := unit.horizontal_distance_to(candidate)
+			if distance < nearest_distance:
+				nearest = candidate
+				nearest_distance = distance
+		var aggro_range: float = float(unit.data.get_stat(&"aggro_range", 0.0))
+		if nearest_distance <= aggro_range * 2.0:
+			var command := Command.new()
+			command.type = &"move"
+			command.player_id = 1
+			command.unit_ids = [unit.instance_id]
+			command.target_position = nearest.global_position
+			command.tick = Engine.get_process_frames()
+			EventBus.command_issued.emit(command)

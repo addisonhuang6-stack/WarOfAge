@@ -1,0 +1,21 @@
+{
+	"map_texture": "res://assets/world/world_map.png",
+	"bases": {
+		"player": [0.18, 0.55],
+		"enemy": [0.82, 0.45]
+	},
+	"player_speed": 0.05,
+	"enemy_speed": 0.03,
+	"link_range": 0.2,
+	"interdiction_radius": 0.03,
+	"out_of_supply_speed": 0.45,
+	"collision_radius": 0.022,
+	"dots": [
+		{ "id": "p1", "faction": "player", "pos": [0.3, 0.42], "strength": 3 },
+		{ "id": "p2", "faction": "player", "pos": [0.26, 0.66], "strength": 3 },
+		{ "id": "p3", "faction": "player", "pos": [0.38, 0.55], "strength": 2 },
+		{ "id": "e1", "faction": "enemy", "pos": [0.7, 0.38], "strength": 3 },
+		{ "id": "e2", "faction": "enemy", "pos": [0.74, 0.62], "strength": 3 },
+		{ "id": "e3", "faction": "enemy", "pos": [0.6, 0.5], "strength": 2 }
+	]
+}
