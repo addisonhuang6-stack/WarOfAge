@@ -44,6 +44,13 @@ static func attack_direction_multiplier(
 	return penalty if dot < 0.5 else 1.0
 
 
+## 冲锋伤害：基础值等于动量 M×V，再减去目标护甲。
+static func compute_charge_damage(attacker: UnitData, target: UnitData, momentum: float) -> float:
+	var armor := float(target.get_stat(&"armor", 0.0))
+	var min_damage := float(attacker.get_stat(&"min_damage", 0.0))
+	return maxf(momentum - armor, min_damage)
+
+
 ## 方向护甲：背后受击护甲 -70%，侧面受击护甲 -40%（只对配置了该规则的单位生效）。
 static func directional_armor_multiplier(
 	target: UnitData,

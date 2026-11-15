@@ -9,11 +9,13 @@ var game_theme: Theme
 var subtitle_label: Label
 var language_label: Label
 var sound_label: Label
+var ai_label: Label
 var map_label: Label
 var start_button: Button
 var quit_button: Button
 var language_option: OptionButton
 var sound_toggle: CheckButton
+var ai_toggle: CheckButton
 var volume_slider: HSlider
 var volume_value_label: Label
 var map_option: OptionButton
@@ -130,6 +132,12 @@ func _build_ui() -> void:
 	volume_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	sound_row.add_child(volume_value_label)
 
+	ai_label = Label.new()
+	grid.add_child(ai_label)
+	ai_toggle = CheckButton.new()
+	ai_toggle.toggled.connect(_on_ai_toggled)
+	grid.add_child(ai_toggle)
+
 	map_label = Label.new()
 	grid.add_child(map_label)
 	map_option = OptionButton.new()
@@ -179,12 +187,15 @@ func _sync_from_settings() -> void:
 	subtitle_label.text = GameSettings.t("menu.subtitle")
 	language_label.text = GameSettings.t("menu.language")
 	sound_label.text = GameSettings.t("menu.sound")
+	ai_label.text = GameSettings.t("menu.ai")
 	map_label.text = GameSettings.t("menu.map")
 	sound_toggle.text = GameSettings.t("menu.sound_on")
+	ai_toggle.text = GameSettings.t("menu.ai_on")
 	start_button.text = GameSettings.t("menu.start")
 	quit_button.text = GameSettings.t("menu.quit")
 	volume_value_label.text = "%d%%" % int(round(GameSettings.volume * 100.0))
 	sound_toggle.set_pressed_no_signal(GameSettings.sound_enabled)
+	ai_toggle.set_pressed_no_signal(GameSettings.ai_enabled)
 	volume_slider.set_value_no_signal(GameSettings.volume * 100.0)
 	language_option.select(0 if GameSettings.language == "zh" else 1)
 	_rebuild_map_options()
@@ -217,6 +228,12 @@ func _on_language_selected(index: int) -> void:
 
 func _on_sound_toggled(enabled: bool) -> void:
 	GameSettings.set_sound_enabled(enabled)
+	if enabled:
+		GameSettings.play_click()
+
+
+func _on_ai_toggled(enabled: bool) -> void:
+	GameSettings.set_ai_enabled(enabled)
 	if enabled:
 		GameSettings.play_click()
 

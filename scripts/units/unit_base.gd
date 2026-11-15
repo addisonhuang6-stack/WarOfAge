@@ -51,11 +51,12 @@ var _acquire_timer: float = 0.0
 
 var _charge_elapsed: float = 0.0
 var _charge_speed: float = 0.0
-var _charge_loss: float = 0.0
 var _charge_hits: Dictionary = {}
 var _dust_timer: float = 0.0
 
 var _marker: Node3D
+var _cracks: Node3D
+var _crack_count: int = 0
 var _selection_marker: MeshInstance3D
 var _hp_bar_bg: MeshInstance3D
 var _hp_bar_fill: MeshInstance3D
@@ -140,6 +141,7 @@ func take_damage(amount: float, _attacker: UnitBase) -> void:
 		return
 	hp = maxf(hp - amount, 0.0)
 	_update_hp_bar()
+	_update_cracks()
 	if hp <= 0.0:
 		_die()
 
@@ -178,6 +180,9 @@ func _build_visuals() -> void:
 		_add_flat_disc(_marker, radius, team_color, 0.03)
 		_add_flat_triangle(_marker, radius * 0.9, radius * 0.65, Color(0.96, 0.96, 0.96), 0.045)
 	_update_marker_rotation()
+	_cracks = Node3D.new()
+	_cracks.position.y = 0.055
+	add_child(_cracks)
 
 	# 选中标记（贴地圆盘）
 	_selection_marker = MeshInstance3D.new()
@@ -494,7 +499,6 @@ func _start_charge() -> void:
 	is_charging = true
 	_charge_elapsed = 0.0
 	_charge_speed = _speed
-	_charge_loss = 0.0
 	_charge_hits.clear()
 	_dust_timer = 0.0
 
@@ -505,7 +509,7 @@ func _process_charge(delta: float) -> void:
 	var max_speed := float(data.get_stat(&"charge_max_speed", _speed))
 	_charge_elapsed += delta
 	var ramp := clampf(_charge_elapsed / duration, 0.0, 1.0)
-	_charge_speed = maxf(lerpf(_speed, max_speed, ramp) - _charge_loss, 0.0)
+	_charge_speed = lerpf(_speed, max_speed, ramp)
 	if _charge_speed <= 0.05:
 		_cancel_charge()
 		return
@@ -562,23 +566,57 @@ func _handle_charge_collisions(flat_facing: Vector3, from: Vector3) -> void:
 			continue
 
 		var target_toughness := float(unit.data.get_stat(&"toughness", 0.0))
-		if _charge_speed <= target_toughness:
-			continue
+		var momentum := float(data.get_stat(&"mass", 1.0)) * _charge_speed
 		_charge_hits[unit.instance_id] = true
-		var push_scale := float(data.get_stat(&"charge_push_scale", 0.16))
-		var push_distance := clampf((_charge_speed - target_toughness) * push_scale, 0.15, 0.8)
-		var push_direction := offset.normalized() if offset.length() > 0.001 else flat_facing
-		unit.global_position += push_direction * push_distance
-		_charge_loss += target_toughness
-		_charge_speed = maxf(_charge_speed - target_toughness, 0.0)
-		EventBus.charge_dust.emit(Vector3(unit.global_position.x, 0.02, unit.global_position.z))
+		var charge_damage := CombatSystem.compute_charge_damage(data, unit.data, momentum)
+		unit.take_damage(charge_damage, self)
+		if momentum - target_toughness > 0.0 and is_instance_valid(unit) and unit.hp > 0.0:
+			var push_scale := float(data.get_stat(&"charge_push_scale", 0.16))
+			var push_distance := clampf((momentum - target_toughness) * push_scale, 0.15, 0.8)
+			var push_direction := offset.normalized() if offset.length() > 0.001 else flat_facing
+			unit.global_position += push_direction * push_distance
+			EventBus.charge_dust.emit(Vector3(unit.global_position.x, 0.02, unit.global_position.z))
+			melee_target = unit
+			current_target = unit
+			_cancel_charge()
+			return
 
 
 func _cancel_charge() -> void:
 	is_charging = false
 	_charge_speed = 0.0
-	_charge_loss = 0.0
 	_charge_hits.clear()
+
+
+func _update_cracks() -> void:
+	if _cracks == null or max_hp <= 0.0:
+		return
+	var fraction := hp / max_hp
+	var target_count := 0
+	if fraction <= 0.25:
+		target_count = 3
+	elif fraction <= 0.5:
+		target_count = 2
+	elif fraction <= 0.75:
+		target_count = 1
+	while _crack_count < target_count:
+		_add_crack(_crack_count)
+		_crack_count += 1
+
+
+func _add_crack(index: int) -> void:
+	var crack := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(radius * 2.2, 0.004, 0.004)
+	crack.mesh = box
+	crack.material_override = _flat_material(Color(0.05, 0.04, 0.03))
+	crack.rotation.y = deg_to_rad(25.0 + 37.0 * float(index))
+	crack.position = Vector3(
+		(float(index) - 1.0) * radius * 0.22,
+		0.0,
+		(float(index) - 1.0) * radius * 0.12
+	)
+	_cracks.add_child(crack)
 
 
 func _die() -> void:

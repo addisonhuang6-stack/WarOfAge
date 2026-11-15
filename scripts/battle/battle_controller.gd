@@ -62,7 +62,6 @@ func _ready() -> void:
 	_apply_map()
 
 	EventBus.unit_died.connect(_on_unit_died)
-	EventBus.unit_attacked.connect(_on_unit_attacked)
 	EventBus.battle_ended.connect(_on_battle_ended)
 	EventBus.charge_dust.connect(_on_charge_dust)
 
@@ -74,6 +73,8 @@ func _physics_process(delta: float) -> void:
 	if _path_timer <= 0.0:
 		_path_timer = 0.1
 		_update_path_lines()
+		if selected_units.size() > 1:
+			selection_box.queue_redraw()
 
 	if _battle_over or not _enemy_ai_enabled:
 		return
@@ -196,7 +197,7 @@ func _spawn_armies() -> void:
 	if not (parsed is Dictionary):
 		push_error("战斗配置不是有效的 JSON 对象")
 		return
-	_enemy_ai_enabled = bool(parsed.get("enemy_ai", false))
+	_enemy_ai_enabled = GameSettings.ai_enabled
 	_spawn_groups(parsed.get("player", []), 0)
 	_spawn_groups(parsed.get("enemy", []), 1)
 
@@ -285,6 +286,8 @@ func _refresh_selection() -> void:
 			unit.is_selected = unit in selected_units
 	EventBus.selection_changed.emit(selected_units.size())
 	_update_hud()
+	if selection_box != null:
+		selection_box.queue_redraw()
 
 
 func _box_select(from: Vector2, to: Vector2, additive: bool) -> void:
@@ -361,9 +364,17 @@ func _issue_move_for_units(units: Array[UnitBase], points: Array[Vector3], comma
 	if valid_units.is_empty():
 		return
 	centroid /= float(valid_units.size())
+	var center: Vector3 = Vector3(points.back().x, 0.0, points.back().z)
+	var forward := center - centroid
+	if points.size() >= 2:
+		var tail_direction: Vector3 = points.back() - points[points.size() - 2]
+		if tail_direction.length() > 0.01:
+			forward = tail_direction
+	var slots := _formation_slots(valid_units.size(), center, forward, _average_radius(valid_units))
 	var tick := Engine.get_process_frames()
-	for unit in valid_units:
-		var offset := Vector3(unit.global_position.x - centroid.x, 0.0, unit.global_position.z - centroid.z)
+	for i in range(valid_units.size()):
+		var unit := valid_units[i]
+		var offset := slots[i] - center
 		var waypoints: Array[Vector3] = []
 		for point in points:
 			waypoints.append(Vector3(point.x + offset.x, 0.0, point.z + offset.z))
@@ -376,6 +387,37 @@ func _issue_move_for_units(units: Array[UnitBase], points: Array[Vector3], comma
 		command.tick = tick
 		tick += 1
 		EventBus.command_issued.emit(command)
+
+
+func _average_radius(units: Array[UnitBase]) -> float:
+	var total := 0.0
+	var count := 0
+	for unit in units:
+		if is_instance_valid(unit):
+			total += unit.radius
+			count += 1
+	return total / float(maxi(count, 1))
+
+
+func _formation_slots(count: int, center: Vector3, forward: Vector3, average_radius: float) -> Array[Vector3]:
+	var slots: Array[Vector3] = []
+	if count <= 0:
+		return slots
+	var columns := int(ceil(sqrt(float(count))))
+	var rows := int(ceil(float(count) / float(columns)))
+	var spacing := maxf(average_radius * 3.0, 0.16)
+	var flat_forward := Vector3(forward.x, 0.0, forward.z)
+	if flat_forward.length() < 0.001:
+		flat_forward = Vector3.RIGHT
+	flat_forward = flat_forward.normalized()
+	var right := Vector3(-flat_forward.z, 0.0, flat_forward.x)
+	for i in range(count):
+		var row := int(i / columns)
+		var column := i % columns
+		var lateral := (float(column) - (float(columns) - 1.0) * 0.5) * spacing
+		var depth := (float(row) - (float(rows) - 1.0) * 0.5) * spacing
+		slots.append(center + right * lateral - flat_forward * depth)
+	return slots
 
 
 func _issue_charge() -> void:
@@ -674,6 +716,42 @@ func _draw_selection_box() -> void:
 			var normal := Vector2(-screen_dir.y, screen_dir.x).normalized()
 			selection_box.draw_line(from - normal * 10.0, from + normal * 10.0, Color(0.35, 0.9, 1.0, 0.95), 2.0)
 			selection_box.draw_line(to - normal * 10.0, to + normal * 10.0, Color(0.35, 0.9, 1.0, 0.95), 2.0)
+	_draw_formation_preview()
+
+
+func _draw_formation_preview() -> void:
+	if selected_units.size() < 2 or _drawing_defense_line:
+		return
+	var center := Vector3.ZERO
+	var forward := Vector3.ZERO
+	for unit in selected_units:
+		if is_instance_valid(unit):
+			center += unit.global_position
+			forward += unit.facing
+	center /= float(selected_units.size())
+	if _drawing_path and not _drag_path_world.is_empty():
+		center = _drag_path_world.back()
+		if _drag_path_world.size() >= 2:
+			forward = _drag_path_world.back() - _drag_path_world[_drag_path_world.size() - 2]
+	if forward.length() < 0.01:
+		forward = Vector3.RIGHT
+	var slots := _formation_slots(
+		selected_units.size(),
+		Vector3(center.x, 0.0, center.z),
+		forward,
+		_average_radius(selected_units)
+	)
+	for i in range(mini(slots.size(), selected_units.size())):
+		var screen := camera.unproject_position(slots[i])
+		var color := Color(0.3, 0.75, 1.0, 0.5)
+		if selected_units[i].data.shape == "triangle":
+			selection_box.draw_colored_polygon(PackedVector2Array([
+				screen + Vector2(0.0, -4.0),
+				screen + Vector2(-3.5, 3.0),
+				screen + Vector2(3.5, 3.0),
+			]), color)
+		else:
+			selection_box.draw_circle(screen, 3.0, color)
 
 
 func _draw_dashed(points: PackedVector2Array, color: Color, width: float) -> void:
@@ -788,25 +866,6 @@ func _return_to_world() -> void:
 		return
 	WorldState.resolve_battle("player" if _battle_result == 0 else "enemy")
 	get_tree().change_scene_to_file("res://scenes/macro_map.tscn")
-
-
-func _on_unit_attacked(_attacker: UnitBase, target: UnitBase, damage: float, is_counter: bool) -> void:
-	var label := Label3D.new()
-	label.text = "%d%s" % [int(round(damage)), "!" if is_counter else ""]
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.font_size = 64
-	label.pixel_size = 0.012
-	label.outline_size = 8
-	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
-	label.modulate = Color(1.0, 0.82, 0.25) if is_counter else Color(1.0, 0.4, 0.35)
-	label.position = target.global_position + Vector3(0.0, target.radius * 2.0, 0.0)
-	label.position += Vector3(randf_range(-0.2, 0.2), 0.0, randf_range(-0.2, 0.2))
-	add_child(label)
-	var tween := create_tween()
-	tween.set_parallel(true)
-	tween.tween_property(label, "position:y", label.position.y + 0.9, 0.9)
-	tween.tween_property(label, "modulate:a", 0.0, 0.9)
-	tween.chain().tween_callback(label.queue_free)
 
 
 func _enemy_ai_step() -> void:

@@ -13,6 +13,8 @@ const TEXTS := {
 		"menu.language": "语言",
 		"menu.sound": "声音",
 		"menu.sound_on": "开启",
+		"menu.ai": "人机",
+		"menu.ai_on": "开启",
 		"menu.map": "地图",
 		"menu.start": "开始游戏",
 		"menu.quit": "退出游戏",
@@ -39,6 +41,8 @@ const TEXTS := {
 		"menu.language": "Language",
 		"menu.sound": "Sound",
 		"menu.sound_on": "On",
+		"menu.ai": "AI",
+		"menu.ai_on": "On",
 		"menu.map": "Map",
 		"menu.start": "Start Game",
 		"menu.quit": "Quit",
@@ -65,6 +69,7 @@ const TEXTS := {
 var language: String = "zh"
 var sound_enabled: bool = true
 var volume: float = 0.8
+var ai_enabled: bool = true
 var selected_map: String = "random"
 
 var _audio_player: AudioStreamPlayer
@@ -124,6 +129,14 @@ func set_map(value: String) -> void:
 	changed.emit()
 
 
+func set_ai_enabled(value: bool) -> void:
+	if value == ai_enabled:
+		return
+	ai_enabled = value
+	_save_settings()
+	changed.emit()
+
+
 func play_click() -> void:
 	_play(_click_stream)
 
@@ -153,6 +166,7 @@ func _load_settings() -> void:
 		language = "zh"
 	sound_enabled = bool(config.get_value("audio", "enabled", sound_enabled))
 	volume = clampf(float(config.get_value("audio", "volume", volume)), 0.0, 1.0)
+	ai_enabled = bool(config.get_value("game", "ai_enabled", ai_enabled))
 	selected_map = str(config.get_value("game", "map", selected_map))
 
 
@@ -161,5 +175,6 @@ func _save_settings() -> void:
 	config.set_value("ui", "language", language)
 	config.set_value("audio", "enabled", sound_enabled)
 	config.set_value("audio", "volume", volume)
+	config.set_value("game", "ai_enabled", ai_enabled)
 	config.set_value("game", "map", selected_map)
 	config.save(SETTINGS_PATH)
