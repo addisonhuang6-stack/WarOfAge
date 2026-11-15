@@ -85,29 +85,31 @@ func _physics_process(delta: float) -> void:
 	if is_charging:
 		_process_charge(delta)
 	else:
-		if melee_target != null and (not is_instance_valid(melee_target) or melee_target.hp <= 0.0):
+		if not move_points.is_empty():
 			melee_target = null
-			current_target = null
-		if melee_target == null:
-			_try_engage_enemy()
-		if melee_target != null:
-			_process_melee(delta)
-		elif not move_points.is_empty():
 			current_target = null
 			_follow_path(delta)
 		else:
-			# 待命状态：只攻击射程内的敌人，绝不自主移动。
-			if _acquire_timer <= 0.0:
-				_acquire_target()
-				_acquire_timer = 0.25
-			if current_target != null and not is_instance_valid(current_target):
+			if melee_target != null and (not is_instance_valid(melee_target) or melee_target.hp <= 0.0):
+				melee_target = null
 				current_target = null
-			if current_target != null:
-				if _is_target_engageable(current_target):
-					if _attack_cooldown <= 0.0:
-						_attack(current_target)
-				else:
+			if melee_target == null:
+				_try_engage_enemy()
+			if melee_target != null:
+				_process_melee(delta)
+			else:
+				# 待命状态：只攻击射程内的敌人，绝不自主移动。
+				if _acquire_timer <= 0.0:
+					_acquire_target()
+					_acquire_timer = 0.25
+				if current_target != null and not is_instance_valid(current_target):
 					current_target = null
+				if current_target != null:
+					if _is_target_engageable(current_target):
+						if _attack_cooldown <= 0.0:
+							_attack(current_target)
+					else:
+						current_target = null
 		_apply_separation(delta)
 
 	_update_marker_rotation()
@@ -386,11 +388,9 @@ func _try_engage_enemy() -> void:
 		return
 	melee_target = best
 	current_target = best
-	move_points.clear()
-	hold_facing = Vector3.ZERO
 
 
-func _process_melee(delta: float) -> void:
+func _process_melee(_delta: float) -> void:
 	if melee_target == null or not is_instance_valid(melee_target) or melee_target.hp <= 0.0:
 		melee_target = null
 		current_target = null
@@ -405,8 +405,9 @@ func _process_melee(delta: float) -> void:
 	if distance <= attack_range:
 		if _attack_cooldown <= 0.0:
 			_attack(melee_target)
-	else:
-		_move_position(delta, melee_target.global_position, not _holds_facing_in_combat())
+	elif distance > leash:
+		melee_target = null
+		current_target = null
 
 
 func _move_position(delta: float, target: Vector3, rotate_facing: bool = true) -> void:

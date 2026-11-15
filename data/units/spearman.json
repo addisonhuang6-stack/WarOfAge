@@ -11,7 +11,7 @@
 		"speed": 2.0,
 		"radius": 0.055,
 		"attack_range": 0.2,
-		"attack_interval": 1.2,
+		"attack_interval": 0.333333,
 		"aggro_range": 5.0,
 		"counter_tags": ["cavalry"],
 		"counter_multiplier": 2.0,

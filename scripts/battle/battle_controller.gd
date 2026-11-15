@@ -976,15 +976,22 @@ func _return_to_world() -> void:
 func _enemy_ai_step() -> void:
 	var enemies: Array[UnitBase] = []
 	var players: Array[UnitBase] = []
+	var any_engaged := false
 	for id in units_by_id:
 		var unit: UnitBase = units_by_id[id]
 		if not is_instance_valid(unit) or unit.hp <= 0.0:
 			continue
 		if unit.player_id == 0:
 			players.append(unit)
-		elif unit.melee_target == null and not unit.is_charging:
-			enemies.append(unit)
+		else:
+			if unit.melee_target != null:
+				any_engaged = true
+			elif not unit.is_charging:
+				enemies.append(unit)
 	if enemies.is_empty() or players.is_empty():
+		return
+	# 一旦前线接战，停止重新下令，让双方在阵型原位对拼。
+	if any_engaged:
 		return
 	var centroid := Vector3.ZERO
 	for unit in enemies:
