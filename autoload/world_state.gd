@@ -1,5 +1,5 @@
 extends Node
-## 宏观世界状态：跨场景保存世界地图上的据点、补给与战斗结果。
+## 宏观世界状态：跨场景保存世界地图上的据点、边境与战斗结果。
 
 signal changed
 
@@ -60,8 +60,6 @@ func _make_dot(raw: Dictionary) -> Dictionary:
 		"pos": _to_vec2(raw.get("pos", [0.5, 0.5])),
 		"target": null,
 		"strength": int(raw.get("strength", 1)),
-		"supplied": false,
-		"supply_source": "",
 	}
 
 

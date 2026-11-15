@@ -1,5 +1,5 @@
 extends Control
-## 宏观战略层：世界地图、据点移动、补给线与微观战斗入口。
+## 宏观战略层：世界地图、据点移动、动态边境与微观战斗入口。
 
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 const MENU_SCENE := "res://scenes/main_menu.tscn"
@@ -14,7 +14,8 @@ var menu_button: Button
 var restart_button: Button
 
 var selected_dot_id: String = ""
-var _supply_timer: float = 0.0
+var _frontline_timer: float = 0.0
+var _frontline_segments: Array = []
 var _toast_timer: float = 0.0
 var _transitioning: bool = false
 var _game_over: bool = false
@@ -25,7 +26,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	WorldState.ensure_initialized()
 	_build_ui()
-	_refresh_supply()
+	_refresh_frontline()
 	_update_hud()
 	if WorldState.last_result == "player":
 		_show_toast(GameSettings.t("macro.last_win"), Color(0.55, 0.95, 0.6))
@@ -138,10 +139,10 @@ func _make_button(text: String) -> Button:
 func _process(delta: float) -> void:
 	if _transitioning or _game_over:
 		return
-	_supply_timer -= delta
-	if _supply_timer <= 0.0:
-		_supply_timer = 0.25
-		_refresh_supply()
+	_frontline_timer -= delta
+	if _frontline_timer <= 0.0:
+		_frontline_timer = float(WorldState.config.get("frontline_refresh", 0.12))
+		_refresh_frontline()
 		_update_hud()
 	_move_dots(delta)
 	_check_collisions()
@@ -155,63 +156,65 @@ func _process(delta: float) -> void:
 	map_canvas.queue_redraw()
 
 
-func _refresh_supply() -> void:
-	var link_range := float(WorldState.config.get("link_range", 0.2))
-	var interdiction := float(WorldState.config.get("interdiction_radius", 0.03))
+func _refresh_frontline() -> void:
+	_frontline_segments.clear()
+	var players: Array[Dictionary] = []
+	var enemies: Array[Dictionary] = []
 	for dot in WorldState.dots:
-		dot["supplied"] = false
-		dot["supply_source"] = ""
-	for faction in ["player", "enemy"]:
-		var base_value: Variant = WorldState.bases.get(faction)
-		if not (base_value is Vector2):
-			continue
-		var base_position: Vector2 = base_value
-		var frontier: Array[Dictionary] = []
-		for dot in WorldState.dots:
-			if str(dot.get("faction", "")) != faction:
-				continue
-			var dot_position := _dot_pos(dot)
-			if base_position.distance_to(dot_position) > link_range:
-				continue
-			if _link_blocked(base_position, dot_position, faction, interdiction):
-				continue
-			dot["supplied"] = true
-			dot["supply_source"] = "base"
-			frontier.append(dot)
-		var index := 0
-		while index < frontier.size():
-			var supplier: Dictionary = frontier[index]
-			index += 1
-			var supplier_position := _dot_pos(supplier)
-			for dot in WorldState.dots:
-				if str(dot.get("faction", "")) != faction or bool(dot.get("supplied", false)):
-					continue
-				var dot_position := _dot_pos(dot)
-				if supplier_position.distance_to(dot_position) > link_range:
-					continue
-				if _link_blocked(supplier_position, dot_position, faction, interdiction):
-					continue
-				dot["supplied"] = true
-				dot["supply_source"] = str(supplier.get("id", ""))
-				frontier.append(dot)
+		var faction := str(dot.get("faction", ""))
+		if faction == "player":
+			players.append(dot)
+		elif faction == "enemy":
+			enemies.append(dot)
+	if players.is_empty() or enemies.is_empty():
+		return
+
+	var influence := float(WorldState.config.get("frontline_influence", 0.35))
+	var step := clampf(float(WorldState.config.get("frontline_step", 0.012)), 0.006, 0.05)
+	var columns := maxi(1, int(ceil(1.0 / step)))
+	var rows := maxi(1, int(ceil(1.0 / step)))
+	var ownership := PackedInt32Array()
+	ownership.resize(columns * rows)
+	var influence_squared := influence * influence
+
+	for row in range(rows):
+		for column in range(columns):
+			var point := Vector2(
+				(float(column) + 0.5) / float(columns),
+				(float(row) + 0.5) / float(rows)
+			)
+			var best_player := INF
+			var best_enemy := INF
+			for dot in players:
+				best_player = minf(best_player, point.distance_squared_to(_dot_pos(dot)))
+			for dot in enemies:
+				best_enemy = minf(best_enemy, point.distance_squared_to(_dot_pos(dot)))
+			if best_player <= influence_squared and best_player < best_enemy:
+				ownership[row * columns + column] = 1
+			elif best_enemy <= influence_squared and best_enemy < best_player:
+				ownership[row * columns + column] = 2
+
+	for row in range(rows):
+		for column in range(columns):
+			var value := ownership[row * columns + column]
+			if column + 1 < columns:
+				var right := ownership[row * columns + column + 1]
+				if _is_frontline_pair(value, right):
+					_frontline_segments.append([
+						Vector2(float(column + 1) / float(columns), float(row) / float(rows)),
+						Vector2(float(column + 1) / float(columns), float(row + 1) / float(rows)),
+					])
+			if row + 1 < rows:
+				var below := ownership[(row + 1) * columns + column]
+				if _is_frontline_pair(value, below):
+					_frontline_segments.append([
+						Vector2(float(column) / float(columns), float(row + 1) / float(rows)),
+						Vector2(float(column + 1) / float(columns), float(row + 1) / float(rows)),
+					])
 
 
-func _link_blocked(a: Vector2, b: Vector2, faction: String, radius: float) -> bool:
-	for dot in WorldState.dots:
-		if str(dot.get("faction", "")) == faction:
-			continue
-		if _segment_distance(_dot_pos(dot), a, b) <= radius:
-			return true
-	return false
-
-
-func _segment_distance(point: Vector2, a: Vector2, b: Vector2) -> float:
-	var ab := b - a
-	var length_squared := ab.length_squared()
-	if length_squared <= 0.000001:
-		return point.distance_to(a)
-	var t := clampf((point - a).dot(ab) / length_squared, 0.0, 1.0)
-	return point.distance_to(a + ab * t)
+func _is_frontline_pair(first: int, second: int) -> bool:
+	return (first == 1 and second == 2) or (first == 2 and second == 1)
 
 
 func _dot_pos(dot: Dictionary) -> Vector2:
@@ -224,7 +227,6 @@ func _dot_pos(dot: Dictionary) -> Vector2:
 func _move_dots(delta: float) -> void:
 	var player_speed := float(WorldState.config.get("player_speed", 0.05))
 	var enemy_speed := float(WorldState.config.get("enemy_speed", 0.03))
-	var out_mult := float(WorldState.config.get("out_of_supply_speed", 0.45))
 
 	for dot in WorldState.dots:
 		if str(dot.get("faction", "")) != "player":
@@ -234,7 +236,7 @@ func _move_dots(delta: float) -> void:
 			continue
 		var position := _dot_pos(dot)
 		var target: Vector2 = target_value
-		var speed := player_speed * (1.0 if bool(dot.get("supplied", true)) else out_mult)
+		var speed := player_speed
 		var next_position := _move_toward(position, target, speed * delta)
 		dot["pos"] = next_position
 		if next_position.distance_to(target) <= 0.004:
@@ -258,7 +260,7 @@ func _move_dots(delta: float) -> void:
 			if candidate_distance < nearest_distance:
 				nearest = candidate
 				nearest_distance = candidate_distance
-		var speed := enemy_speed * (1.0 if bool(dot.get("supplied", true)) else out_mult)
+		var speed := enemy_speed
 		dot["pos"] = _move_toward(position, _dot_pos(nearest), speed * delta)
 
 
@@ -312,18 +314,12 @@ func _check_game_over() -> void:
 func _update_hud() -> void:
 	var player_count := 0
 	var enemy_count := 0
-	var supplied := 0
-	var cut := 0
 	for dot in WorldState.dots:
 		if str(dot.get("faction", "")) == "player":
 			player_count += 1
-			if bool(dot.get("supplied", false)):
-				supplied += 1
-			else:
-				cut += 1
 		else:
 			enemy_count += 1
-	status_label.text = GameSettings.t("macro.status") % [player_count, enemy_count, supplied, cut]
+	status_label.text = GameSettings.t("macro.status") % [player_count, enemy_count]
 
 
 func _draw_map() -> void:
@@ -362,25 +358,27 @@ func _draw_map() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 1.0, 1.0, 0.9)
 		)
 
+	var influence := float(WorldState.config.get("frontline_influence", 0.35))
 	for dot in WorldState.dots:
-		if not bool(dot.get("supplied", false)):
-			continue
+		var center := _to_canvas(_dot_pos(dot), size)
 		var faction := str(dot.get("faction", ""))
-		var color := Color(0.35, 0.78, 1.0, 0.5) if faction == "player" else Color(1.0, 0.45, 0.3, 0.45)
-		var to := _to_canvas(_dot_pos(dot), size)
-		var from := Vector2.ZERO
-		var source_id := str(dot.get("supply_source", ""))
-		if source_id == "base" or source_id.is_empty():
-			var base_value: Variant = WorldState.bases.get(faction)
-			if not (base_value is Vector2):
-				continue
-			from = _to_canvas(base_value, size)
-		else:
-			var source := WorldState.get_dot(source_id)
-			if source.is_empty():
-				continue
-			from = _to_canvas(_dot_pos(source), size)
-		map_canvas.draw_line(from, to, color, 3.0)
+		var color := Color(0.25, 0.68, 1.0, 0.06) if faction == "player" else Color(1.0, 0.3, 0.28, 0.06)
+		var radius_x := influence * size.x
+		var radius_y := influence * size.y
+		var influence_points := PackedVector2Array()
+		for i in range(40):
+			var angle := TAU * float(i) / 40.0
+			influence_points.append(center + Vector2(cos(angle) * radius_x, sin(angle) * radius_y))
+		map_canvas.draw_colored_polygon(influence_points, color)
+
+	for segment_value in _frontline_segments:
+		if not (segment_value is Array) or segment_value.size() < 2:
+			continue
+		var segment: Array = segment_value
+		var from: Vector2 = _to_canvas(segment[0], size)
+		var to: Vector2 = _to_canvas(segment[1], size)
+		map_canvas.draw_line(from, to, Color(0.05, 0.05, 0.05, 0.35), 7.0)
+		map_canvas.draw_line(from, to, Color(1.0, 0.86, 0.4, 0.95), 2.5)
 
 	for faction in WorldState.bases:
 		var base_value: Variant = WorldState.bases[faction]
@@ -400,8 +398,7 @@ func _draw_map() -> void:
 		var radius := 9.0 + float(dot.get("strength", 1)) * 1.5
 		map_canvas.draw_circle(center, radius, color)
 		map_canvas.draw_arc(center, radius + 2.0, 0.0, TAU, 32, Color(0.0, 0.0, 0.0, 0.6), 2.0)
-		var supply_color := Color(0.45, 1.0, 0.5, 0.95) if bool(dot.get("supplied", false)) else Color(1.0, 0.2, 0.15, 0.95)
-		map_canvas.draw_circle(center, radius * 0.3, supply_color)
+		map_canvas.draw_circle(center, radius * 0.28, Color(0.98, 0.98, 0.95, 0.9))
 		if str(dot.get("id", "")) == selected_dot_id:
 			map_canvas.draw_arc(center, radius + 7.0, 0.0, TAU, 40, Color(1.0, 0.9, 0.4), 2.5)
 			var target_value: Variant = dot.get("target")

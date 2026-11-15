@@ -6,9 +6,9 @@
 	},
 	"player_speed": 0.05,
 	"enemy_speed": 0.03,
-	"link_range": 0.2,
-	"interdiction_radius": 0.03,
-	"out_of_supply_speed": 0.45,
+	"frontline_influence": 0.35,
+	"frontline_step": 0.012,
+	"frontline_refresh": 0.12,
 	"collision_radius": 0.022,
 	"biomes": {
 		"default": "grassland",
