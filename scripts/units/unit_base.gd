@@ -454,7 +454,9 @@ func _apply_separation(delta: float) -> void:
 				push += away.normalized() * (min_distance - distance)
 	if push != Vector3.ZERO:
 		var strength: float = float(data.get_stat(&"separation_strength", 2.0))
-		global_position += push * minf(strength * delta, 1.0)
+		# 快速消除重叠：每帧至少修正 35% 的穿插深度，最多 75%。
+		var correction := clampf(maxf(strength * delta * 12.0, 0.35), 0.0, 0.75)
+		global_position += push * correction
 
 
 static func _ensure_separation_grid() -> void:

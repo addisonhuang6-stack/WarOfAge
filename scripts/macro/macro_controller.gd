@@ -15,7 +15,7 @@ var restart_button: Button
 
 var selected_dot_id: String = ""
 var _frontline_timer: float = 0.0
-var _frontline_segments: Array = []
+var _frontline_points: Array[Vector2] = []
 var _toast_timer: float = 0.0
 var _transitioning: bool = false
 var _game_over: bool = false
@@ -158,7 +158,7 @@ func _process(delta: float) -> void:
 
 
 func _refresh_frontline() -> void:
-	_frontline_segments.clear()
+	_frontline_points.clear()
 	var players: Array[Dictionary] = []
 	var enemies: Array[Dictionary] = []
 	for dot in WorldState.dots:
@@ -169,53 +169,92 @@ func _refresh_frontline() -> void:
 			enemies.append(dot)
 	if players.is_empty() or enemies.is_empty():
 		return
+	var candidates: Array[Dictionary] = []
+	for player in players:
+		var enemy := _nearest_opponent(player, enemies)
+		if not enemy.is_empty():
+			candidates.append({
+				"player": player,
+				"enemy": enemy,
+				"mid": _dot_pos(player).lerp(_dot_pos(enemy), 0.5),
+			})
+	if candidates.is_empty():
+		return
+	var all_midpoints: Array[Vector2] = []
+	var x_values: Array[float] = []
+	for candidate in candidates:
+		var midpoint: Vector2 = candidate["mid"]
+		all_midpoints.append(midpoint)
+		x_values.append(midpoint.x)
+	x_values.sort()
+	var median_x := 0.0
+	if x_values.size() % 2 == 0:
+		median_x = (x_values[x_values.size() / 2 - 1] + x_values[x_values.size() / 2]) * 0.5
+	else:
+		median_x = x_values[x_values.size() / 2]
+	var margin := float(WorldState.config.get("encirclement_margin", 0.02))
+	var midpoints: Array[Vector2] = []
+	for candidate in candidates:
+		var player: Dictionary = candidate["player"]
+		var enemy: Dictionary = candidate["enemy"]
+		var player_position := _dot_pos(player)
+		var enemy_position := _dot_pos(enemy)
+		if player_position.x > median_x + margin:
+			continue
+		if enemy_position.x < median_x - margin:
+			continue
+		midpoints.append(candidate["mid"])
+	if midpoints.is_empty():
+		midpoints = all_midpoints
+	midpoints.sort_custom(_sort_frontline_points)
+	var unique: Array[Vector2] = []
+	for point in midpoints:
+		var duplicate := false
+		for existing in unique:
+			if point.distance_to(existing) < 0.012:
+				duplicate = true
+				break
+		if not duplicate:
+			unique.append(point)
+	if unique.is_empty():
+		return
+	if unique.size() == 1:
+		_frontline_points.append(Vector2(unique[0].x, 0.0))
+		_frontline_points.append(Vector2(unique[0].x, 1.0))
+	else:
+		_frontline_points.append(Vector2(unique[0].x, 0.0))
+		for point in unique:
+			_frontline_points.append(point)
+		_frontline_points.append(Vector2(unique[unique.size() - 1].x, 1.0))
 
-	var influence := float(WorldState.config.get("frontline_influence", 0.35))
-	var step := clampf(float(WorldState.config.get("frontline_step", 0.012)), 0.006, 0.05)
-	var columns := maxi(1, int(ceil(1.0 / step)))
-	var rows := maxi(1, int(ceil(1.0 / step)))
-	var ownership := PackedInt32Array()
-	ownership.resize(columns * rows)
-	var influence_squared := influence * influence
 
-	for row in range(rows):
-		for column in range(columns):
-			var point := Vector2(
-				(float(column) + 0.5) / float(columns),
-				(float(row) + 0.5) / float(rows)
-			)
-			var best_player := INF
-			var best_enemy := INF
-			for dot in players:
-				best_player = minf(best_player, point.distance_squared_to(_dot_pos(dot)))
-			for dot in enemies:
-				best_enemy = minf(best_enemy, point.distance_squared_to(_dot_pos(dot)))
-			if best_player <= influence_squared and best_player < best_enemy:
-				ownership[row * columns + column] = 1
-			elif best_enemy <= influence_squared and best_enemy < best_player:
-				ownership[row * columns + column] = 2
-
-	for row in range(rows):
-		for column in range(columns):
-			var value := ownership[row * columns + column]
-			if column + 1 < columns:
-				var right := ownership[row * columns + column + 1]
-				if _is_frontline_pair(value, right):
-					_frontline_segments.append([
-						Vector2(float(column + 1) / float(columns), float(row) / float(rows)),
-						Vector2(float(column + 1) / float(columns), float(row + 1) / float(rows)),
-					])
-			if row + 1 < rows:
-				var below := ownership[(row + 1) * columns + column]
-				if _is_frontline_pair(value, below):
-					_frontline_segments.append([
-						Vector2(float(column) / float(columns), float(row + 1) / float(rows)),
-						Vector2(float(column + 1) / float(columns), float(row + 1) / float(rows)),
-					])
+func _nearest_opponent(dot: Dictionary, opponents: Array[Dictionary]) -> Dictionary:
+	var best: Dictionary = {}
+	var best_distance := INF
+	for other in opponents:
+		var distance := _dot_pos(dot).distance_to(_dot_pos(other))
+		if distance < best_distance:
+			best = other
+			best_distance = distance
+	return best
 
 
-func _is_frontline_pair(first: int, second: int) -> bool:
-	return (first == 1 and second == 2) or (first == 2 and second == 1)
+func _sort_frontline_points(a: Vector2, b: Vector2) -> bool:
+	return a.y < b.y
+
+
+func _front_x_at(y: float) -> float:
+	if _frontline_points.size() < 2:
+		return 0.5
+	for i in range(_frontline_points.size() - 1):
+		var first := _frontline_points[i]
+		var second := _frontline_points[i + 1]
+		if y <= second.y:
+			var span := second.y - first.y
+			if span <= 0.0001:
+				return second.x
+			return lerpf(first.x, second.x, clampf((y - first.y) / span, 0.0, 1.0))
+	return _frontline_points.back().x
 
 
 func _dot_pos(dot: Dictionary) -> Vector2:
@@ -295,16 +334,16 @@ func _update_supply(delta: float) -> void:
 	var recover := float(config.get("recover_per_second", 8.0))
 	var low_threshold := float(config.get("low_threshold", 30.0))
 	for dot in WorldState.dots:
+		var encircled := _is_encircled(dot)
+		dot["encircled"] = encircled
 		if str(dot.get("faction", "")) != "player":
 			continue
-		var encircled := _is_encircled(dot)
 		var supply := float(dot.get("supply", max_supply))
 		if encircled:
 			supply = maxf(supply - drain * delta, 0.0)
 		else:
 			supply = minf(supply + recover * delta, max_supply)
 		dot["supply"] = supply
-		dot["encircled"] = encircled
 		if supply <= low_threshold:
 			dot["supply_status"] = "shortage"
 		elif encircled:
@@ -314,27 +353,14 @@ func _update_supply(delta: float) -> void:
 
 
 func _is_encircled(dot: Dictionary) -> bool:
-	var influence := float(WorldState.config.get("frontline_influence", 0.35))
+	if _frontline_points.size() < 2:
+		return false
+	var margin := float(WorldState.config.get("encirclement_margin", 0.02))
 	var position := _dot_pos(dot)
-	var nearest_enemy := INF
-	var nearest_friendly := INF
-	var enemy_count := 0
-	var friendly_count := 0
-	for other in WorldState.dots:
-		if other == dot:
-			continue
-		var distance := position.distance_to(_dot_pos(other))
-		if str(other.get("faction", "")) == "player":
-			nearest_friendly = minf(nearest_friendly, distance)
-			if distance <= influence:
-				friendly_count += 1
-		else:
-			nearest_enemy = minf(nearest_enemy, distance)
-			if distance <= influence:
-				enemy_count += 1
-	var in_enemy_territory := nearest_enemy <= influence and nearest_enemy < nearest_friendly
-	var surrounded := enemy_count >= 2 and enemy_count > friendly_count
-	return in_enemy_territory or surrounded
+	var front_x := _front_x_at(position.y)
+	if str(dot.get("faction", "")) == "player":
+		return position.x > front_x + margin
+	return position.x < front_x - margin
 
 
 func _check_collisions() -> void:
@@ -430,27 +456,22 @@ func _draw_map() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 1.0, 1.0, 0.9)
 		)
 
-	var influence := float(WorldState.config.get("frontline_influence", 0.35))
-	for dot in WorldState.dots:
-		var center := _to_canvas(_dot_pos(dot), size)
-		var faction := str(dot.get("faction", ""))
-		var color := Color(0.25, 0.68, 1.0, 0.06) if faction == "player" else Color(1.0, 0.3, 0.28, 0.06)
-		var radius_x := influence * size.x
-		var radius_y := influence * size.y
-		var influence_points := PackedVector2Array()
-		for i in range(40):
-			var angle := TAU * float(i) / 40.0
-			influence_points.append(center + Vector2(cos(angle) * radius_x, sin(angle) * radius_y))
-		map_canvas.draw_colored_polygon(influence_points, color)
-
-	for segment_value in _frontline_segments:
-		if not (segment_value is Array) or segment_value.size() < 2:
-			continue
-		var segment: Array = segment_value
-		var from: Vector2 = _to_canvas(segment[0], size)
-		var to: Vector2 = _to_canvas(segment[1], size)
-		map_canvas.draw_line(from, to, Color(0.05, 0.05, 0.05, 0.35), 7.0)
-		map_canvas.draw_line(from, to, Color(1.0, 0.86, 0.4, 0.95), 2.5)
+	if _frontline_points.size() >= 2:
+		var border_screen := PackedVector2Array()
+		for point in _frontline_points:
+			border_screen.append(_to_canvas(point, size))
+		var left_polygon := PackedVector2Array()
+		left_polygon.append(Vector2.ZERO)
+		left_polygon.append_array(border_screen)
+		left_polygon.append(Vector2(0.0, size.y))
+		var right_polygon := PackedVector2Array()
+		right_polygon.append(Vector2(size.x, 0.0))
+		right_polygon.append_array(border_screen)
+		right_polygon.append(Vector2(size.x, size.y))
+		map_canvas.draw_colored_polygon(left_polygon, Color(0.12, 0.3, 0.75, 0.08))
+		map_canvas.draw_colored_polygon(right_polygon, Color(0.75, 0.2, 0.15, 0.08))
+		map_canvas.draw_polyline(border_screen, Color(0.0, 0.0, 0.0, 0.5), 8.0)
+		map_canvas.draw_polyline(border_screen, Color(0.02, 0.02, 0.02, 0.95), 3.5)
 
 	for faction in WorldState.bases:
 		var base_value: Variant = WorldState.bases[faction]
@@ -471,6 +492,8 @@ func _draw_map() -> void:
 		map_canvas.draw_circle(center, radius, color)
 		map_canvas.draw_arc(center, radius + 2.0, 0.0, TAU, 32, Color(0.0, 0.0, 0.0, 0.6), 2.0)
 		map_canvas.draw_circle(center, radius * 0.28, Color(0.98, 0.98, 0.95, 0.9))
+		if bool(dot.get("encircled", false)):
+			map_canvas.draw_arc(center, radius + 10.0, 0.0, TAU, 40, Color(0.0, 0.0, 0.0, 0.95), 3.0)
 		if faction == "player":
 			var max_supply := maxf(_supply_max(), 1.0)
 			var supply := clampf(float(dot.get("supply", max_supply)), 0.0, max_supply)

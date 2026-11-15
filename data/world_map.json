@@ -6,9 +6,8 @@
 	},
 	"player_speed": 0.05,
 	"enemy_speed": 0.03,
-	"frontline_influence": 0.35,
-	"frontline_step": 0.012,
 	"frontline_refresh": 0.12,
+	"encirclement_margin": 0.02,
 	"supply": {
 		"max": 100,
 		"drain_per_second": 12,
@@ -33,11 +32,17 @@
 		]
 	},
 	"dots": [
-		{ "id": "p1", "faction": "player", "pos": [0.3, 0.42], "strength": 3 },
-		{ "id": "p2", "faction": "player", "pos": [0.26, 0.66], "strength": 3 },
-		{ "id": "p3", "faction": "player", "pos": [0.38, 0.55], "strength": 2 },
-		{ "id": "e1", "faction": "enemy", "pos": [0.7, 0.38], "strength": 3 },
-		{ "id": "e2", "faction": "enemy", "pos": [0.74, 0.62], "strength": 3 },
-		{ "id": "e3", "faction": "enemy", "pos": [0.6, 0.5], "strength": 2 }
+		{ "id": "p1", "faction": "player", "pos": [0.28, 0.18], "strength": 3 },
+		{ "id": "p2", "faction": "player", "pos": [0.36, 0.3], "strength": 2 },
+		{ "id": "p3", "faction": "player", "pos": [0.29, 0.42], "strength": 3 },
+		{ "id": "p4", "faction": "player", "pos": [0.37, 0.54], "strength": 2 },
+		{ "id": "p5", "faction": "player", "pos": [0.29, 0.66], "strength": 3 },
+		{ "id": "p6", "faction": "player", "pos": [0.36, 0.78], "strength": 2 },
+		{ "id": "e1", "faction": "enemy", "pos": [0.72, 0.2], "strength": 3 },
+		{ "id": "e2", "faction": "enemy", "pos": [0.64, 0.32], "strength": 2 },
+		{ "id": "e3", "faction": "enemy", "pos": [0.71, 0.44], "strength": 3 },
+		{ "id": "e4", "faction": "enemy", "pos": [0.63, 0.56], "strength": 2 },
+		{ "id": "e5", "faction": "enemy", "pos": [0.71, 0.68], "strength": 3 },
+		{ "id": "e6", "faction": "enemy", "pos": [0.64, 0.8], "strength": 2 }
 	]
 }
