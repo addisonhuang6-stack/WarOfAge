@@ -9,9 +9,12 @@ var map_canvas: Control
 var title_label: Label
 var instruction_label: Label
 var status_label: Label
+var selection_label: Label
 var result_label: Label
 var menu_button: Button
 var restart_button: Button
+var speed_label: Label
+var pause_label: Label
 
 var selected_dot_id: String = ""
 var _frontline_timer: float = 0.0
@@ -24,10 +27,13 @@ var _game_over: bool = false
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	GameSettings.set_paused(false)
 	WorldState.ensure_initialized()
 	_build_ui()
 	_refresh_frontline()
 	_update_hud()
+	GameSettings.changed.connect(_update_speed_hud)
+	_update_speed_hud()
 	if WorldState.last_result == "player":
 		_show_toast(GameSettings.t("macro.last_win"), Color(0.55, 0.95, 0.6))
 	elif WorldState.last_result == "enemy":
@@ -80,6 +86,7 @@ func _build_ui() -> void:
 	instruction_label = _make_label(Vector2(16.0, 40.0), 15, Color(0.85, 0.88, 0.9))
 	instruction_label.text = GameSettings.t("macro.instructions")
 	status_label = _make_label(Vector2(16.0, 66.0), 15, Color(0.65, 0.85, 0.7))
+	selection_label = _make_label(Vector2(16.0, 90.0), 15, Color(0.78, 0.9, 1.0))
 
 	result_label = Label.new()
 	result_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
@@ -115,6 +122,44 @@ func _build_ui() -> void:
 	restart_button.pressed.connect(_on_restart_pressed)
 	add_child(restart_button)
 
+	speed_label = Label.new()
+	speed_label.anchor_left = 1.0
+	speed_label.anchor_right = 1.0
+	speed_label.anchor_top = 1.0
+	speed_label.anchor_bottom = 1.0
+	speed_label.offset_left = -430.0
+	speed_label.offset_right = -16.0
+	speed_label.offset_top = -48.0
+	speed_label.offset_bottom = -16.0
+	speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_style_overlay_label(speed_label, 15, Color(0.85, 0.88, 0.92))
+	add_child(speed_label)
+
+	pause_label = Label.new()
+	pause_label.anchor_left = 0.5
+	pause_label.anchor_right = 0.5
+	pause_label.anchor_top = 0.5
+	pause_label.anchor_bottom = 0.5
+	pause_label.offset_left = -120.0
+	pause_label.offset_right = 120.0
+	pause_label.offset_top = -44.0
+	pause_label.offset_bottom = 44.0
+	pause_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pause_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	pause_label.text = GameSettings.t("hud.pause")
+	pause_label.visible = false
+	_style_overlay_label(pause_label, 36, Color(1.0, 0.86, 0.35))
+	add_child(pause_label)
+
+
+func _style_overlay_label(label: Label, font_size: int, color: Color) -> void:
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_override("font", ui_font)
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+	label.add_theme_constant_override("outline_size", 5)
+
 
 func _make_label(position: Vector2, font_size: int, color: Color) -> Label:
 	var label := Label.new()
@@ -134,6 +179,18 @@ func _make_button(text: String) -> Button:
 	button.text = text
 	button.add_theme_font_size_override("font_size", 16)
 	return button
+
+
+func _update_speed_hud() -> void:
+	if speed_label == null:
+		return
+	var speed_value := GameSettings.game_speed
+	var speed_text := ("%d×" % int(round(speed_value))) if is_equal_approx(speed_value, round(speed_value)) else ("%.1f×" % speed_value)
+	var text := (GameSettings.t("hud.speed") % speed_text) + " · " + GameSettings.t("hud.speed_hint")
+	if GameSettings.paused:
+		text = GameSettings.t("hud.pause") + " · " + text
+	speed_label.text = text
+	pause_label.visible = GameSettings.paused
 
 
 func _process(delta: float) -> void:
@@ -418,6 +475,27 @@ func _update_hud() -> void:
 		else:
 			enemy_count += 1
 	status_label.text = GameSettings.t("macro.status") % [player_count, enemy_count, cut, shortage]
+	if selected_dot_id.is_empty():
+		selection_label.text = ""
+	else:
+		var selected_dot := WorldState.get_dot(selected_dot_id)
+		if selected_dot.is_empty():
+			selection_label.text = ""
+		else:
+			var max_supply := maxf(_supply_max(), 1.0)
+			var supply := clampf(float(selected_dot.get("supply", max_supply)), 0.0, max_supply)
+			var suffix := ""
+			if bool(selected_dot.get("encircled", false)):
+				suffix += " · " + GameSettings.t("macro.supply_cut")
+			if str(selected_dot.get("supply_status", "normal")) == "shortage":
+				suffix += " · " + GameSettings.t("macro.supply_shortage")
+			selection_label.text = "%s %s · %s %d%%%s" % [
+				GameSettings.t("macro.selected"),
+				selected_dot_id,
+				GameSettings.t("macro.supply"),
+				int(round(supply / max_supply * 100.0)),
+				suffix,
+			]
 
 
 func _draw_map() -> void:
@@ -472,6 +550,16 @@ func _draw_map() -> void:
 		map_canvas.draw_colored_polygon(right_polygon, Color(0.75, 0.2, 0.15, 0.08))
 		map_canvas.draw_polyline(border_screen, Color(0.0, 0.0, 0.0, 0.5), 8.0)
 		map_canvas.draw_polyline(border_screen, Color(0.02, 0.02, 0.02, 0.95), 3.5)
+
+	if not selected_dot_id.is_empty():
+		var selected_dot := WorldState.get_dot(selected_dot_id)
+		if not selected_dot.is_empty():
+			var target_value: Variant = selected_dot.get("target")
+			if target_value is Vector2:
+				var from := _to_canvas(_dot_pos(selected_dot), size)
+				var to := _to_canvas(target_value, size)
+				map_canvas.draw_line(from, to, Color(1.0, 0.85, 0.3, 0.55), 2.0)
+				map_canvas.draw_circle(to, 6.0, Color(1.0, 0.85, 0.3, 0.85))
 
 	for faction in WorldState.bases:
 		var base_value: Variant = WorldState.bases[faction]
@@ -588,8 +676,18 @@ func _on_map_gui_input(event: InputEvent) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if _transitioning:
 		return
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		get_tree().change_scene_to_file(MENU_SCENE)
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_P or event.keycode == KEY_SPACE:
+			GameSettings.toggle_pause()
+			_update_speed_hud()
+		elif event.keycode == KEY_BRACKETLEFT or event.keycode == KEY_MINUS:
+			GameSettings.adjust_game_speed(-1)
+			_update_speed_hud()
+		elif event.keycode == KEY_BRACKETRIGHT or event.keycode == KEY_EQUAL:
+			GameSettings.adjust_game_speed(1)
+			_update_speed_hud()
+		elif event.keycode == KEY_ESCAPE:
+			get_tree().change_scene_to_file(MENU_SCENE)
 
 
 func _show_toast(text: String, color: Color) -> void:

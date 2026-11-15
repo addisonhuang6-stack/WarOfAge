@@ -17,6 +17,11 @@ const TEXTS := {
 		"menu.ai": "人机",
 		"menu.ai_on": "开启",
 		"menu.speed": "游戏速度",
+		"hud.pause": "暂停",
+		"hud.speed": "速度 %s",
+		"hud.speed_hint": "P 暂停 · [ ] 调速 · WASD 平移",
+		"macro.selected": "已选",
+		"macro.supply": "补给",
 		"menu.map": "地图",
 		"menu.start": "开始游戏",
 		"menu.quit": "退出游戏",
@@ -26,7 +31,9 @@ const TEXTS := {
 		"map.mountain": "高山",
 		"battle.instructions": "左键选兵/划线移动 · Ctrl+左键拖拽防御线 · 右键移动 · C 冲锋 · T 同类\nCtrl+1~9 编队 · 1~9 选队 · 滚轮缩放 · 中键平移 · R 重开",
 		"battle.counter": "克制：长矛兵反骑，对轻骑兵伤害 ×2",
-		"battle.status": "我方 %d  ·  敌方 %d  ·  已选 %d",
+		"battle.status": "我方 %d  ·  敌方 %d  ·  已选 %d%s",
+		"unit.spearman": "长矛兵",
+		"unit.light_cavalry": "轻骑兵",
 		"battle.map": "地图：%s",
 		"battle.victory": "胜利！",
 		"battle.defeat": "战败",
@@ -51,6 +58,11 @@ const TEXTS := {
 		"menu.ai": "AI",
 		"menu.ai_on": "On",
 		"menu.speed": "Game Speed",
+		"hud.pause": "Paused",
+		"hud.speed": "Speed %s",
+		"hud.speed_hint": "P pause · [ ] speed · WASD pan",
+		"macro.selected": "Selected",
+		"macro.supply": "Supply",
 		"menu.map": "Map",
 		"menu.start": "Start Game",
 		"menu.quit": "Quit",
@@ -60,7 +72,9 @@ const TEXTS := {
 		"map.mountain": "Mountains",
 		"battle.instructions": "LMB select / draw move · Ctrl+LMB drag: defense line · RMB move · C charge · T same type\nCtrl+1~9 group · 1~9 select group · Wheel zoom · MMB pan · R restart",
 		"battle.counter": "Counter: Spearmen deal ×2 damage to Light Cavalry",
-		"battle.status": "Units %d  ·  Enemy %d  ·  Selected %d",
+		"battle.status": "Units %d  ·  Enemy %d  ·  Selected %d%s",
+		"unit.spearman": "Spearmen",
+		"unit.light_cavalry": "Light Cavalry",
 		"battle.map": "Map: %s",
 		"battle.victory": "Victory!",
 		"battle.defeat": "Defeat",
@@ -84,6 +98,7 @@ var sound_enabled: bool = true
 var volume: float = 0.8
 var ai_enabled: bool = true
 var game_speed: float = 1.0
+var paused: bool = false
 var selected_map: String = "random"
 
 var _audio_player: AudioStreamPlayer
@@ -163,6 +178,28 @@ func set_game_speed(value: float) -> void:
 	changed.emit()
 
 
+func toggle_pause() -> void:
+	set_paused(not paused)
+
+
+func set_paused(value: bool) -> void:
+	if value == paused:
+		return
+	paused = value
+	_apply_game_speed()
+	changed.emit()
+
+
+func adjust_game_speed(direction: int) -> void:
+	var index := 0
+	for i in range(GAME_SPEEDS.size()):
+		if is_equal_approx(float(GAME_SPEEDS[i]), game_speed):
+			index = i
+			break
+	index = clampi(index + direction, 0, GAME_SPEEDS.size() - 1)
+	set_game_speed(float(GAME_SPEEDS[index]))
+
+
 func play_click() -> void:
 	_play(_click_stream)
 
@@ -184,7 +221,7 @@ func _apply_audio() -> void:
 
 
 func _apply_game_speed() -> void:
-	Engine.time_scale = game_speed
+	Engine.time_scale = 0.0 if paused else game_speed
 
 
 func _load_settings() -> void:

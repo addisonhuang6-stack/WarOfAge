@@ -27,6 +27,7 @@ var map_option: OptionButton
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	GameSettings.set_paused(false)
 	maps = map_generator.load_maps()
 	_build_ui()
 	_sync_from_settings()

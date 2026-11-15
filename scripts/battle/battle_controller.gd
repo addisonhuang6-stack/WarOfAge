@@ -18,6 +18,8 @@ var status_label: Label
 var map_label: Label
 var result_label: Label
 var return_hint_label: Label
+var speed_label: Label
+var pause_label: Label
 var ui_font: SystemFont
 var environment: Environment
 var ground_mesh: MeshInstance3D
@@ -55,6 +57,7 @@ var _path_timer: float = 0.0
 
 
 func _ready() -> void:
+	GameSettings.set_paused(false)
 	_setup_world()
 	_setup_ui()
 	_load_unit_data()
@@ -66,9 +69,13 @@ func _ready() -> void:
 	EventBus.charge_dust.connect(_on_charge_dust)
 
 	_update_hud()
+	GameSettings.changed.connect(_update_speed_hud)
+	_update_speed_hud()
 
 
 func _physics_process(delta: float) -> void:
+	_handle_keyboard_pan(delta)
+
 	_path_timer -= delta
 	if _path_timer <= 0.0:
 		_path_timer = 0.1
@@ -161,6 +168,73 @@ func _setup_ui() -> void:
 	return_hint_label.text = GameSettings.t("battle.return_hint")
 	return_hint_label.modulate = Color(0.8, 0.86, 0.9)
 	return_hint_label.visible = false
+
+	speed_label = Label.new()
+	speed_label.anchor_left = 1.0
+	speed_label.anchor_right = 1.0
+	speed_label.anchor_top = 1.0
+	speed_label.anchor_bottom = 1.0
+	speed_label.offset_left = -430.0
+	speed_label.offset_right = -16.0
+	speed_label.offset_top = -48.0
+	speed_label.offset_bottom = -16.0
+	speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_style_overlay_label(speed_label, 15, Color(0.85, 0.88, 0.92))
+	canvas_layer.add_child(speed_label)
+
+	pause_label = Label.new()
+	pause_label.anchor_left = 0.5
+	pause_label.anchor_right = 0.5
+	pause_label.anchor_top = 0.5
+	pause_label.anchor_bottom = 0.5
+	pause_label.offset_left = -120.0
+	pause_label.offset_right = 120.0
+	pause_label.offset_top = -44.0
+	pause_label.offset_bottom = 44.0
+	pause_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pause_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	pause_label.text = GameSettings.t("hud.pause")
+	pause_label.visible = false
+	_style_overlay_label(pause_label, 36, Color(1.0, 0.86, 0.35))
+	canvas_layer.add_child(pause_label)
+
+
+func _style_overlay_label(label: Label, font_size: int, color: Color) -> void:
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_override("font", ui_font)
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.8))
+	label.add_theme_constant_override("outline_size", 5)
+
+
+func _handle_keyboard_pan(delta: float) -> void:
+	var direction := Vector2.ZERO
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		direction.x -= 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		direction.x += 1.0
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		direction.y -= 1.0
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		direction.y += 1.0
+	if direction == Vector2.ZERO:
+		return
+	var pan_speed := camera.size * 0.7
+	camera.position.x = clampf(camera.position.x + direction.x * pan_speed * delta, CAMERA_BOUNDS_MIN.x, CAMERA_BOUNDS_MAX.x)
+	camera.position.z = clampf(camera.position.z + direction.y * pan_speed * delta, CAMERA_BOUNDS_MIN.y, CAMERA_BOUNDS_MAX.y)
+
+
+func _update_speed_hud() -> void:
+	if speed_label == null:
+		return
+	var speed_value := GameSettings.game_speed
+	var speed_text := ("%d×" % int(round(speed_value))) if is_equal_approx(speed_value, round(speed_value)) else ("%.1f×" % speed_value)
+	var text := (GameSettings.t("hud.speed") % speed_text) + " · " + GameSettings.t("hud.speed_hint")
+	if GameSettings.paused:
+		text = GameSettings.t("hud.pause") + " · " + text
+	speed_label.text = text
+	pause_label.visible = GameSettings.paused
 
 
 func _make_label(position: Vector2, font_size: int) -> Label:
@@ -574,7 +648,16 @@ func _on_charge_dust(position: Vector3) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed:
-		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
+		if event.keycode == KEY_P or event.keycode == KEY_SPACE:
+			GameSettings.toggle_pause()
+			_update_speed_hud()
+		elif event.keycode == KEY_BRACKETLEFT or event.keycode == KEY_MINUS:
+			GameSettings.adjust_game_speed(-1)
+			_update_speed_hud()
+		elif event.keycode == KEY_BRACKETRIGHT or event.keycode == KEY_EQUAL:
+			GameSettings.adjust_game_speed(1)
+			_update_speed_hud()
+		elif event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER:
 			_return_to_world()
 		elif event.keycode == KEY_R:
 			get_tree().reload_current_scene()
@@ -825,7 +908,24 @@ func _update_hud() -> void:
 			player_count += 1
 		else:
 			enemy_count += 1
-	status_label.text = GameSettings.t("battle.status") % [player_count, enemy_count, selected_units.size()]
+	var selected_spears := 0
+	var selected_cavalry := 0
+	for unit in selected_units:
+		if not is_instance_valid(unit):
+			continue
+		if unit.data.id == &"spearman":
+			selected_spears += 1
+		elif unit.data.id == &"light_cavalry":
+			selected_cavalry += 1
+	var composition := ""
+	if selected_spears > 0 or selected_cavalry > 0:
+		var parts: Array[String] = []
+		if selected_spears > 0:
+			parts.append("%s %d" % [GameSettings.t("unit.spearman"), selected_spears])
+		if selected_cavalry > 0:
+			parts.append("%s %d" % [GameSettings.t("unit.light_cavalry"), selected_cavalry])
+		composition = " [" + " · ".join(parts) + "]"
+	status_label.text = GameSettings.t("battle.status") % [player_count, enemy_count, selected_units.size(), composition]
 
 
 func _on_unit_died(unit: UnitBase) -> void:
