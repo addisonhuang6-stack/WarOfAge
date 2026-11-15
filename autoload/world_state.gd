@@ -78,9 +78,51 @@ func get_dot(dot_id: String) -> Dictionary:
 	return {}
 
 
+## 返回世界地图某个归一化坐标所在地形。
+func biome_at(position: Vector2) -> String:
+	var biomes: Variant = config.get("biomes", {})
+	if not (biomes is Dictionary):
+		return "grassland"
+	var biome_dict: Dictionary = biomes
+	var default_map := str(biome_dict.get("default", "grassland"))
+	var circles: Variant = biome_dict.get("circles", [])
+	if circles is Array:
+		for circle_value in circles:
+			if not (circle_value is Dictionary):
+				continue
+			var circle: Dictionary = circle_value
+			var center := _to_vec2(circle.get("center", [0.5, 0.5]))
+			var radius := _to_vec2(circle.get("radius", [0.1, 0.1]))
+			var dx := (position.x - center.x) / maxf(radius.x, 0.0001)
+			var dy := (position.y - center.y) / maxf(radius.y, 0.0001)
+			if dx * dx + dy * dy <= 1.0:
+				return str(circle.get("map", default_map))
+	return default_map
+
+
+func biome_circles() -> Array:
+	var biomes: Variant = config.get("biomes", {})
+	if biomes is Dictionary:
+		var biome_dict: Dictionary = biomes
+		var circles: Variant = biome_dict.get("circles", [])
+		if circles is Array:
+			return circles
+	return []
+
+
+func biome_labels() -> Array:
+	var biomes: Variant = config.get("biomes", {})
+	if biomes is Dictionary:
+		var biome_dict: Dictionary = biomes
+		var labels: Variant = biome_dict.get("labels", [])
+		if labels is Array:
+			return labels
+	return []
+
+
 ## 玩家与敌方据点接触时记录交战，供微观战斗结束后结算。
-func begin_engagement(player_id: String, enemy_id: String) -> void:
-	pending_engagement = {"player": player_id, "enemy": enemy_id}
+func begin_engagement(player_id: String, enemy_id: String, map_id: String = "") -> void:
+	pending_engagement = {"player": player_id, "enemy": enemy_id, "map": map_id}
 
 
 ## 微观战斗结束：败方据点从世界地图上移除。

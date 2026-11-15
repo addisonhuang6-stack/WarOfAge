@@ -280,7 +280,9 @@ func _check_collisions() -> void:
 				continue
 			if _dot_pos(player_dot).distance_to(_dot_pos(enemy_dot)) <= radius:
 				_transitioning = true
-				WorldState.begin_engagement(str(player_dot.get("id", "")), str(enemy_dot.get("id", "")))
+				var contact_position := _dot_pos(player_dot).lerp(_dot_pos(enemy_dot), 0.5)
+				var biome := WorldState.biome_at(contact_position)
+				WorldState.begin_engagement(str(player_dot.get("id", "")), str(enemy_dot.get("id", "")), biome)
 				GameSettings.play_start()
 				get_tree().change_scene_to_file(BATTLE_SCENE)
 				return
@@ -328,6 +330,37 @@ func _draw_map() -> void:
 	if map_canvas == null:
 		return
 	var size := map_canvas.size
+
+	for circle_value in WorldState.biome_circles():
+		if not (circle_value is Dictionary):
+			continue
+		var circle: Dictionary = circle_value
+		var center_data: Array = circle.get("center", [0.5, 0.5])
+		var radius_data: Array = circle.get("radius", [0.1, 0.1])
+		var center := Vector2(float(center_data[0]) * size.x, float(center_data[1]) * size.y)
+		var radius_x := float(radius_data[0]) * size.x
+		var radius_y := float(radius_data[1]) * size.y
+		var points := PackedVector2Array()
+		for i in range(40):
+			var angle := TAU * float(i) / 40.0
+			points.append(center + Vector2(cos(angle) * radius_x, sin(angle) * radius_y))
+		map_canvas.draw_colored_polygon(points, _biome_color(str(circle.get("map", ""))))
+
+	for label_value in WorldState.biome_labels():
+		if not (label_value is Dictionary):
+			continue
+		var label_data: Dictionary = label_value
+		var position_data: Array = label_data.get("pos", [0.5, 0.5])
+		var label_position := Vector2(float(position_data[0]) * size.x, float(position_data[1]) * size.y)
+		var label_text := GameSettings.t("map." + str(label_data.get("map", "grassland")))
+		map_canvas.draw_string(
+			ui_font, label_position - Vector2(22.0, 0.0), label_text,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.0, 0.0, 0.0, 0.75)
+		)
+		map_canvas.draw_string(
+			ui_font, label_position - Vector2(21.0, -1.0), label_text,
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1.0, 1.0, 1.0, 0.9)
+		)
 
 	for dot in WorldState.dots:
 		if not bool(dot.get("supplied", false)):
@@ -379,6 +412,16 @@ func _draw_map() -> void:
 
 func _to_canvas(normalized: Vector2, size: Vector2) -> Vector2:
 	return Vector2(normalized.x * size.x, normalized.y * size.y)
+
+
+func _biome_color(map_id: String) -> Color:
+	match map_id:
+		"desert":
+			return Color(0.95, 0.72, 0.35, 0.14)
+		"mountain":
+			return Color(0.65, 0.72, 0.85, 0.16)
+		_:
+			return Color(0.35, 0.85, 0.5, 0.1)
 
 
 func _handle_click(screen_position: Vector2) -> void:

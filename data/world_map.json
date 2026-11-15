@@ -10,6 +10,22 @@
 	"interdiction_radius": 0.03,
 	"out_of_supply_speed": 0.45,
 	"collision_radius": 0.022,
+	"biomes": {
+		"default": "grassland",
+		"circles": [
+			{ "map": "desert", "center": [0.27, 0.7], "radius": [0.13, 0.18] },
+			{ "map": "desert", "center": [0.71, 0.62], "radius": [0.1, 0.15] },
+			{ "map": "mountain", "center": [0.3, 0.25], "radius": [0.2, 0.14] },
+			{ "map": "mountain", "center": [0.72, 0.22], "radius": [0.24, 0.17] }
+		],
+		"labels": [
+			{ "map": "grassland", "pos": [0.47, 0.5] },
+			{ "map": "desert", "pos": [0.27, 0.7] },
+			{ "map": "desert", "pos": [0.71, 0.62] },
+			{ "map": "mountain", "pos": [0.3, 0.25] },
+			{ "map": "mountain", "pos": [0.72, 0.22] }
+		]
+	},
 	"dots": [
 		{ "id": "p1", "faction": "player", "pos": [0.3, 0.42], "strength": 3 },
 		{ "id": "p2", "faction": "player", "pos": [0.26, 0.66], "strength": 3 },

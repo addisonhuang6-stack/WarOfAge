@@ -242,7 +242,12 @@ func _spawn_unit(type_name: String, team_id: int, position: Vector3) -> void:
 func _apply_map() -> void:
 	var generator := MapGenerator.new()
 	generator.load_maps()
-	current_map = generator.pick_map(GameSettings.selected_map)
+	var preferred_map := GameSettings.selected_map
+	if not WorldState.pending_engagement.is_empty():
+		var encounter_map := str(WorldState.pending_engagement.get("map", ""))
+		if not encounter_map.is_empty():
+			preferred_map = encounter_map
+	current_map = generator.pick_map(preferred_map)
 	if current_map.is_empty():
 		return
 	generator.apply(current_map, ground_mesh, environment, _decor_root, randi())
