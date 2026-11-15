@@ -6,6 +6,7 @@ signal changed
 const SETTINGS_PATH := "user://settings.cfg"
 const CLICK_SOUND_PATH := "res://assets/audio/click.wav"
 const START_SOUND_PATH := "res://assets/audio/start.wav"
+const GAME_SPEEDS := [0.5, 1.0, 2.0, 3.0]
 
 const TEXTS := {
 	"zh": {
@@ -15,6 +16,7 @@ const TEXTS := {
 		"menu.sound_on": "开启",
 		"menu.ai": "人机",
 		"menu.ai_on": "开启",
+		"menu.speed": "游戏速度",
 		"menu.map": "地图",
 		"menu.start": "开始游戏",
 		"menu.quit": "退出游戏",
@@ -30,12 +32,14 @@ const TEXTS := {
 		"battle.defeat": "战败",
 		"battle.return_hint": "按 Enter 返回世界地图",
 		"macro.title": "世界地图",
-		"macro.instructions": "左键选点下令；据点影响区形成动态边境；接敌进入战斗，地形由接战位置决定",
-		"macro.status": "我方据点 %d  ·  敌方据点 %d",
+		"macro.instructions": "左键选择军队下令；军队影响区形成动态边境；接敌进入战斗，地形由接战位置决定",
+		"macro.status": "我方军队 %d  ·  敌方军队 %d  ·  补给中断 %d  ·  短缺 %d",
+		"macro.supply_cut": "补给中断",
+		"macro.supply_shortage": "短缺",
 		"macro.menu": "返回主菜单",
 		"macro.restart": "重新开始",
 		"macro.victory": "你已消灭所有敌军",
-		"macro.defeat": "我方部队已全部被消灭",
+		"macro.defeat": "我方军队已全部被消灭",
 		"macro.last_win": "上一战：胜利",
 		"macro.last_loss": "上一战：失败",
 	},
@@ -46,6 +50,7 @@ const TEXTS := {
 		"menu.sound_on": "On",
 		"menu.ai": "AI",
 		"menu.ai_on": "On",
+		"menu.speed": "Game Speed",
 		"menu.map": "Map",
 		"menu.start": "Start Game",
 		"menu.quit": "Quit",
@@ -61,12 +66,14 @@ const TEXTS := {
 		"battle.defeat": "Defeat",
 		"battle.return_hint": "Press Enter to return to the world map",
 		"macro.title": "World Map",
-		"macro.instructions": "Click a friendly dot to move; influence zones form a shifting frontline; contact starts a battle using local terrain",
-		"macro.status": "Friendly %d  ·  Enemy %d",
+		"macro.instructions": "Click a friendly army to move; influence zones form a shifting frontline; contact starts a battle using local terrain",
+		"macro.status": "Friendly armies %d  ·  Enemy armies %d  ·  Cut off %d  ·  Shortage %d",
+		"macro.supply_cut": "Supply cut",
+		"macro.supply_shortage": "Shortage",
 		"macro.menu": "Main Menu",
 		"macro.restart": "Restart",
 		"macro.victory": "All enemy forces destroyed",
-		"macro.defeat": "All friendly forces destroyed",
+		"macro.defeat": "All friendly armies destroyed",
 		"macro.last_win": "Last battle: Victory",
 		"macro.last_loss": "Last battle: Defeat",
 	},
@@ -76,6 +83,7 @@ var language: String = "zh"
 var sound_enabled: bool = true
 var volume: float = 0.8
 var ai_enabled: bool = true
+var game_speed: float = 1.0
 var selected_map: String = "random"
 
 var _audio_player: AudioStreamPlayer
@@ -90,6 +98,7 @@ func _ready() -> void:
 	_start_stream = load(START_SOUND_PATH)
 	_load_settings()
 	_apply_audio()
+	_apply_game_speed()
 
 
 func t(key: String) -> String:
@@ -143,6 +152,17 @@ func set_ai_enabled(value: bool) -> void:
 	changed.emit()
 
 
+func set_game_speed(value: float) -> void:
+	var clamped := clampf(value, 0.25, 3.0)
+	if is_equal_approx(clamped, game_speed):
+		_apply_game_speed()
+		return
+	game_speed = clamped
+	_apply_game_speed()
+	_save_settings()
+	changed.emit()
+
+
 func play_click() -> void:
 	_play(_click_stream)
 
@@ -163,6 +183,10 @@ func _apply_audio() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(volume, 0.0001)))
 
 
+func _apply_game_speed() -> void:
+	Engine.time_scale = game_speed
+
+
 func _load_settings() -> void:
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_PATH) != OK:
@@ -173,6 +197,7 @@ func _load_settings() -> void:
 	sound_enabled = bool(config.get_value("audio", "enabled", sound_enabled))
 	volume = clampf(float(config.get_value("audio", "volume", volume)), 0.0, 1.0)
 	ai_enabled = bool(config.get_value("game", "ai_enabled", ai_enabled))
+	game_speed = clampf(float(config.get_value("game", "speed", game_speed)), 0.25, 3.0)
 	selected_map = str(config.get_value("game", "map", selected_map))
 
 
@@ -182,5 +207,6 @@ func _save_settings() -> void:
 	config.set_value("audio", "enabled", sound_enabled)
 	config.set_value("audio", "volume", volume)
 	config.set_value("game", "ai_enabled", ai_enabled)
+	config.set_value("game", "speed", game_speed)
 	config.set_value("game", "map", selected_map)
 	config.save(SETTINGS_PATH)

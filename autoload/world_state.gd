@@ -1,5 +1,5 @@
 extends Node
-## 宏观世界状态：跨场景保存世界地图上的据点、边境与战斗结果。
+## 宏观世界状态：跨场景保存世界地图上的军队、边境与战斗结果。
 
 signal changed
 
@@ -54,12 +54,19 @@ func _load_world() -> void:
 
 
 func _make_dot(raw: Dictionary) -> Dictionary:
+	var max_supply := 100.0
+	var supply_config: Variant = config.get("supply", {})
+	if supply_config is Dictionary:
+		var supply_dict: Dictionary = supply_config
+		max_supply = float(supply_dict.get("max", max_supply))
 	return {
 		"id": str(raw.get("id", "")),
 		"faction": str(raw.get("faction", "player")),
 		"pos": _to_vec2(raw.get("pos", [0.5, 0.5])),
 		"target": null,
 		"strength": int(raw.get("strength", 1)),
+		"supply": max_supply,
+		"supply_status": "normal",
 	}
 
 
@@ -118,12 +125,12 @@ func biome_labels() -> Array:
 	return []
 
 
-## 玩家与敌方据点接触时记录交战，供微观战斗结束后结算。
+## 玩家与敌方军队接触时记录交战，供微观战斗结束后结算。
 func begin_engagement(player_id: String, enemy_id: String, map_id: String = "") -> void:
 	pending_engagement = {"player": player_id, "enemy": enemy_id, "map": map_id}
 
 
-## 微观战斗结束：败方据点从世界地图上移除。
+## 微观战斗结束：败方军队从世界地图上移除。
 func resolve_battle(winner: String) -> void:
 	last_result = winner
 	if pending_engagement.is_empty():

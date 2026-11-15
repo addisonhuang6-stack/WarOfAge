@@ -9,6 +9,12 @@
 	"frontline_influence": 0.35,
 	"frontline_step": 0.012,
 	"frontline_refresh": 0.12,
+	"supply": {
+		"max": 100,
+		"drain_per_second": 12,
+		"recover_per_second": 8,
+		"low_threshold": 30
+	},
 	"collision_radius": 0.022,
 	"biomes": {
 		"default": "grassland",

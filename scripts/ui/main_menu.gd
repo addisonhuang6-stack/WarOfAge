@@ -1,6 +1,8 @@
 extends Control
 ## 开始菜单：语言、声音、地图选择与开始/退出。
 
+const SPEED_VALUES := [0.5, 1.0, 2.0, 3.0]
+
 var map_generator := MapGenerator.new()
 var maps: Array = []
 var ui_font: SystemFont
@@ -10,12 +12,14 @@ var subtitle_label: Label
 var language_label: Label
 var sound_label: Label
 var ai_label: Label
+var speed_label: Label
 var map_label: Label
 var start_button: Button
 var quit_button: Button
 var language_option: OptionButton
 var sound_toggle: CheckButton
 var ai_toggle: CheckButton
+var speed_option: OptionButton
 var volume_slider: HSlider
 var volume_value_label: Label
 var map_option: OptionButton
@@ -138,6 +142,17 @@ func _build_ui() -> void:
 	ai_toggle.toggled.connect(_on_ai_toggled)
 	grid.add_child(ai_toggle)
 
+	speed_label = Label.new()
+	grid.add_child(speed_label)
+	speed_option = OptionButton.new()
+	speed_option.add_item("0.5×")
+	speed_option.add_item("1×")
+	speed_option.add_item("2×")
+	speed_option.add_item("3×")
+	speed_option.custom_minimum_size = Vector2(260.0, 38.0)
+	speed_option.item_selected.connect(_on_speed_selected)
+	grid.add_child(speed_option)
+
 	map_label = Label.new()
 	grid.add_child(map_label)
 	map_option = OptionButton.new()
@@ -188,6 +203,7 @@ func _sync_from_settings() -> void:
 	language_label.text = GameSettings.t("menu.language")
 	sound_label.text = GameSettings.t("menu.sound")
 	ai_label.text = GameSettings.t("menu.ai")
+	speed_label.text = GameSettings.t("menu.speed")
 	map_label.text = GameSettings.t("menu.map")
 	sound_toggle.text = GameSettings.t("menu.sound_on")
 	ai_toggle.text = GameSettings.t("menu.ai_on")
@@ -196,6 +212,7 @@ func _sync_from_settings() -> void:
 	volume_value_label.text = "%d%%" % int(round(GameSettings.volume * 100.0))
 	sound_toggle.set_pressed_no_signal(GameSettings.sound_enabled)
 	ai_toggle.set_pressed_no_signal(GameSettings.ai_enabled)
+	speed_option.select(_speed_index())
 	volume_slider.set_value_no_signal(GameSettings.volume * 100.0)
 	language_option.select(0 if GameSettings.language == "zh" else 1)
 	_rebuild_map_options()
@@ -236,6 +253,18 @@ func _on_ai_toggled(enabled: bool) -> void:
 	GameSettings.set_ai_enabled(enabled)
 	if enabled:
 		GameSettings.play_click()
+
+
+func _on_speed_selected(index: int) -> void:
+	GameSettings.set_game_speed(SPEED_VALUES[index])
+	GameSettings.play_click()
+
+
+func _speed_index() -> int:
+	for i in range(SPEED_VALUES.size()):
+		if is_equal_approx(float(SPEED_VALUES[i]), GameSettings.game_speed):
+			return i
+	return 1
 
 
 func _on_volume_changed(value: float) -> void:

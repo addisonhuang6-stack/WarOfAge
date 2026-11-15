@@ -1,5 +1,5 @@
 extends Control
-## 宏观战略层：世界地图、据点移动、动态边境与微观战斗入口。
+## 宏观战略层：世界地图、军队移动、动态边境与微观战斗入口。
 
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 const MENU_SCENE := "res://scenes/main_menu.tscn"
@@ -145,6 +145,7 @@ func _process(delta: float) -> void:
 		_refresh_frontline()
 		_update_hud()
 	_move_dots(delta)
+	_update_supply(delta)
 	_check_collisions()
 	if _transitioning:
 		return
@@ -272,6 +273,70 @@ func _move_toward(from: Vector2, to: Vector2, max_step: float) -> Vector2:
 	return from + offset / distance * max_step
 
 
+func _supply_config() -> Dictionary:
+	var value: Variant = WorldState.config.get("supply", {})
+	if value is Dictionary:
+		return value
+	return {}
+
+
+func _supply_max() -> float:
+	return float(_supply_config().get("max", 100.0))
+
+
+func _supply_low() -> float:
+	return float(_supply_config().get("low_threshold", 30.0))
+
+
+func _update_supply(delta: float) -> void:
+	var config := _supply_config()
+	var max_supply := float(config.get("max", 100.0))
+	var drain := float(config.get("drain_per_second", 12.0))
+	var recover := float(config.get("recover_per_second", 8.0))
+	var low_threshold := float(config.get("low_threshold", 30.0))
+	for dot in WorldState.dots:
+		if str(dot.get("faction", "")) != "player":
+			continue
+		var encircled := _is_encircled(dot)
+		var supply := float(dot.get("supply", max_supply))
+		if encircled:
+			supply = maxf(supply - drain * delta, 0.0)
+		else:
+			supply = minf(supply + recover * delta, max_supply)
+		dot["supply"] = supply
+		dot["encircled"] = encircled
+		if supply <= low_threshold:
+			dot["supply_status"] = "shortage"
+		elif encircled:
+			dot["supply_status"] = "cut"
+		else:
+			dot["supply_status"] = "normal"
+
+
+func _is_encircled(dot: Dictionary) -> bool:
+	var influence := float(WorldState.config.get("frontline_influence", 0.35))
+	var position := _dot_pos(dot)
+	var nearest_enemy := INF
+	var nearest_friendly := INF
+	var enemy_count := 0
+	var friendly_count := 0
+	for other in WorldState.dots:
+		if other == dot:
+			continue
+		var distance := position.distance_to(_dot_pos(other))
+		if str(other.get("faction", "")) == "player":
+			nearest_friendly = minf(nearest_friendly, distance)
+			if distance <= influence:
+				friendly_count += 1
+		else:
+			nearest_enemy = minf(nearest_enemy, distance)
+			if distance <= influence:
+				enemy_count += 1
+	var in_enemy_territory := nearest_enemy <= influence and nearest_enemy < nearest_friendly
+	var surrounded := enemy_count >= 2 and enemy_count > friendly_count
+	return in_enemy_territory or surrounded
+
+
 func _check_collisions() -> void:
 	var radius := float(WorldState.config.get("collision_radius", 0.022))
 	for player_dot in WorldState.dots:
@@ -314,12 +379,19 @@ func _check_game_over() -> void:
 func _update_hud() -> void:
 	var player_count := 0
 	var enemy_count := 0
+	var cut := 0
+	var shortage := 0
 	for dot in WorldState.dots:
 		if str(dot.get("faction", "")) == "player":
 			player_count += 1
+			var status := str(dot.get("supply_status", "normal"))
+			if bool(dot.get("encircled", false)):
+				cut += 1
+			if status == "shortage":
+				shortage += 1
 		else:
 			enemy_count += 1
-	status_label.text = GameSettings.t("macro.status") % [player_count, enemy_count]
+	status_label.text = GameSettings.t("macro.status") % [player_count, enemy_count, cut, shortage]
 
 
 func _draw_map() -> void:
@@ -399,6 +471,35 @@ func _draw_map() -> void:
 		map_canvas.draw_circle(center, radius, color)
 		map_canvas.draw_arc(center, radius + 2.0, 0.0, TAU, 32, Color(0.0, 0.0, 0.0, 0.6), 2.0)
 		map_canvas.draw_circle(center, radius * 0.28, Color(0.98, 0.98, 0.95, 0.9))
+		if faction == "player":
+			var max_supply := maxf(_supply_max(), 1.0)
+			var supply := clampf(float(dot.get("supply", max_supply)), 0.0, max_supply)
+			var supply_ratio := supply / max_supply
+			var low_ratio := _supply_low() / max_supply
+			var bar_width := 24.0
+			var bar_position := center + Vector2(-bar_width * 0.5, -radius - 9.0)
+			map_canvas.draw_rect(Rect2(bar_position, Vector2(bar_width, 3.0)), Color(0.0, 0.0, 0.0, 0.55))
+			var bar_color := Color(0.35, 0.9, 0.4) if supply_ratio > low_ratio else Color(1.0, 0.55, 0.2)
+			map_canvas.draw_rect(Rect2(bar_position, Vector2(bar_width * supply_ratio, 3.0)), bar_color)
+			var status := str(dot.get("supply_status", "normal"))
+			var encircled := bool(dot.get("encircled", false))
+			if status != "normal" or encircled:
+				var warning_color := Color(1.0, 0.35, 0.2) if status == "shortage" else Color(1.0, 0.65, 0.25)
+				map_canvas.draw_arc(center, radius + 5.0, 0.0, TAU, 32, warning_color, 2.0)
+				var warning_text := GameSettings.t("macro.supply_cut")
+				if status == "shortage":
+					warning_text = GameSettings.t("macro.supply_shortage")
+					if encircled:
+						warning_text = GameSettings.t("macro.supply_cut") + " · " + warning_text
+				var text_position := center + Vector2(-24.0, -radius - 14.0)
+				map_canvas.draw_string(
+					ui_font, text_position + Vector2(1.0, 1.0), warning_text,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.0, 0.0, 0.0, 0.8)
+				)
+				map_canvas.draw_string(
+					ui_font, text_position, warning_text,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 12, warning_color
+				)
 		if str(dot.get("id", "")) == selected_dot_id:
 			map_canvas.draw_arc(center, radius + 7.0, 0.0, TAU, 40, Color(1.0, 0.9, 0.4), 2.5)
 			var target_value: Variant = dot.get("target")
