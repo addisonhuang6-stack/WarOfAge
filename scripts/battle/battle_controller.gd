@@ -229,7 +229,13 @@ func _update_speed_hud() -> void:
 	if speed_label == null:
 		return
 	var speed_value := GameSettings.game_speed
-	var speed_text := ("%d×" % int(round(speed_value))) if is_equal_approx(speed_value, round(speed_value)) else ("%.1f×" % speed_value)
+	var speed_text := ""
+	if is_equal_approx(speed_value, 0.25):
+		speed_text = "0.25×"
+	elif is_equal_approx(speed_value, round(speed_value)):
+		speed_text = "%d×" % int(round(speed_value))
+	else:
+		speed_text = "%.1f×" % speed_value
 	var text := (GameSettings.t("hud.speed") % speed_text) + " · " + GameSettings.t("hud.speed_hint")
 	if GameSettings.paused:
 		text = GameSettings.t("hud.pause") + " · " + text

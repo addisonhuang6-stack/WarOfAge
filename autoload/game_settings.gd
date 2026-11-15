@@ -6,7 +6,7 @@ signal changed
 const SETTINGS_PATH := "user://settings.cfg"
 const CLICK_SOUND_PATH := "res://assets/audio/click.wav"
 const START_SOUND_PATH := "res://assets/audio/start.wav"
-const GAME_SPEEDS := [0.5, 1.0, 2.0, 3.0]
+const GAME_SPEEDS := [0.25, 0.5, 1.0, 2.0, 3.0]
 
 const TEXTS := {
 	"zh": {

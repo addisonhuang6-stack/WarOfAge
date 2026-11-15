@@ -1,7 +1,7 @@
 extends Control
 ## 开始菜单：语言、声音、地图选择与开始/退出。
 
-const SPEED_VALUES := [0.5, 1.0, 2.0, 3.0]
+const SPEED_VALUES := [0.25, 0.5, 1.0, 2.0, 3.0]
 
 var map_generator := MapGenerator.new()
 var maps: Array = []
@@ -146,6 +146,7 @@ func _build_ui() -> void:
 	speed_label = Label.new()
 	grid.add_child(speed_label)
 	speed_option = OptionButton.new()
+	speed_option.add_item("0.25×")
 	speed_option.add_item("0.5×")
 	speed_option.add_item("1×")
 	speed_option.add_item("2×")
