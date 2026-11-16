@@ -12,6 +12,7 @@ static var registry: Array[UnitBase] = []
 static var _separation_grid: Dictionary = {}
 static var _separation_frame: int = -1
 const SEPARATION_CELL_SIZE := 0.25
+const CONTACT_TOLERANCE := 0.02
 
 var data: UnitData
 var player_id: int = -1
@@ -53,6 +54,8 @@ var _charge_elapsed: float = 0.0
 var _charge_speed: float = 0.0
 var _charge_hits: Dictionary = {}
 var _dust_timer: float = 0.0
+var _in_melee: bool = false
+var _shake_phase: float = 0.0
 
 var _marker: Node3D
 var _cracks: Node3D
@@ -79,6 +82,7 @@ func _physics_process(delta: float) -> void:
 	if hp <= 0.0:
 		return
 
+	_in_melee = false
 	_attack_cooldown = maxf(_attack_cooldown - delta, 0.0)
 	_acquire_timer -= delta
 
@@ -113,6 +117,7 @@ func _physics_process(delta: float) -> void:
 		_apply_separation(delta)
 
 	_update_marker_rotation()
+	_update_combat_shake(delta)
 
 
 ## 命令模式入口：所有行为都经由 Command 下发。
@@ -302,10 +307,11 @@ func _is_target_engageable(target: UnitBase) -> bool:
 		return false
 	if target.player_id == player_id:
 		return false
-	return horizontal_distance_to(target) <= float(data.get_stat(&"attack_range", 0.0))
+	return _is_contact_with(target)
 
 
 func _attack(target: UnitBase) -> void:
+	_in_melee = true
 	var flat_to_target := Vector3(target.global_position.x - global_position.x, 0.0, target.global_position.z - global_position.z)
 	var hold_facing := _holds_facing_in_combat()
 	var facing_before := facing
@@ -322,14 +328,12 @@ func _attack(target: UnitBase) -> void:
 
 
 func _acquire_target() -> void:
-	var attack_range: float = float(data.get_stat(&"attack_range", 0.0))
+	var contacts := _find_contact_enemies()
 	var best: UnitBase = null
 	var best_distance := INF
-	for unit in registry:
-		if unit == self or unit.player_id == player_id or unit.hp <= 0.0:
-			continue
+	for unit in contacts:
 		var distance := horizontal_distance_to(unit)
-		if distance <= attack_range and distance < best_distance:
+		if distance < best_distance:
 			best = unit
 			best_distance = distance
 	current_target = best
@@ -395,19 +399,64 @@ func _process_melee(_delta: float) -> void:
 		melee_target = null
 		current_target = null
 		return
-	var leash := float(data.get_stat(&"leash_radius", 0.9))
-	var distance := horizontal_distance_to(melee_target)
-	if distance > leash:
-		melee_target = null
-		current_target = null
+	var contacts := _find_contact_enemies()
+	_in_melee = not contacts.is_empty()
+	if contacts.is_empty():
+		var leash := float(data.get_stat(&"leash_radius", 0.9))
+		if horizontal_distance_to(melee_target) > leash:
+			melee_target = null
+			current_target = null
 		return
-	var attack_range := float(data.get_stat(&"attack_range", 0.0))
-	if distance <= attack_range:
-		if _attack_cooldown <= 0.0:
-			_attack(melee_target)
-	elif distance > leash:
-		melee_target = null
-		current_target = null
+	if not (melee_target in contacts):
+		melee_target = contacts[0]
+		current_target = contacts[0]
+	if _attack_cooldown <= 0.0:
+		for target in contacts:
+			_attack(target)
+
+
+func _is_contact_with(target: UnitBase) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	return horizontal_distance_to(target) <= radius + target.radius + CONTACT_TOLERANCE
+
+
+func _find_contact_enemies() -> Array[UnitBase]:
+	var contacts: Array[UnitBase] = []
+	_ensure_separation_grid()
+	var center := _grid_cell(global_position)
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var bucket_value: Variant = _separation_grid.get(Vector2i(center.x + dx, center.y + dz))
+			if not (bucket_value is Array):
+				continue
+			var bucket: Array = bucket_value
+			for other_value in bucket:
+				if not (other_value is UnitBase):
+					continue
+				var other: UnitBase = other_value
+				if other == self or not is_instance_valid(other) or other.hp <= 0.0:
+					continue
+				if other.player_id == player_id:
+					continue
+				if _is_contact_with(other):
+					contacts.append(other)
+	return contacts
+
+
+func _update_combat_shake(delta: float) -> void:
+	if _marker == null:
+		return
+	_shake_phase += delta * 55.0
+	if _in_melee:
+		var amount := radius * 0.45
+		_marker.position = Vector3(
+			sin(_shake_phase * 1.9) * amount,
+			0.0,
+			cos(_shake_phase * 2.7) * amount
+		)
+	else:
+		_marker.position = _marker.position.lerp(Vector3.ZERO, minf(delta * 14.0, 1.0))
 
 
 func _move_position(delta: float, target: Vector3, rotate_facing: bool = true) -> void:
@@ -575,7 +624,7 @@ func _handle_charge_collisions(flat_facing: Vector3, from: Vector3) -> void:
 		unit.take_damage(charge_damage, self)
 		if momentum - target_toughness > 0.0 and is_instance_valid(unit) and unit.hp > 0.0:
 			var push_scale := float(data.get_stat(&"charge_push_scale", 0.16))
-			var push_distance := clampf((momentum - target_toughness) * push_scale, 0.15, 0.8)
+			var push_distance := clampf((momentum - target_toughness) * push_scale, 0.03, 0.08)
 			var push_direction := offset.normalized() if offset.length() > 0.001 else flat_facing
 			unit.global_position += push_direction * push_distance
 			EventBus.charge_dust.emit(Vector3(unit.global_position.x, 0.02, unit.global_position.z))

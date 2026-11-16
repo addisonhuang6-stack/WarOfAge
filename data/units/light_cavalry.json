@@ -2,7 +2,7 @@
 	"id": "light_cavalry",
 	"name": "轻骑兵",
 	"tags": ["cavalry", "melee"],
-	"shape": "triangle",
+	"shape": "circle",
 	"stats": {
 		"hp": 200,
 		"attack": 15,
