@@ -30,6 +30,13 @@ var unit_types: Dictionary = {}
 var units_by_id: Dictionary = {}
 var selected_units: Array[UnitBase] = []
 var next_unit_id: int = 0
+var regiment_size: int = 10
+var player_regiments: Array[Regiment] = []
+var enemy_regiments: Array[Regiment] = []
+var regiments_by_id: Dictionary = {}
+var regiment_cards: Dictionary = {}
+var card_bar: HBoxContainer
+var _card_timer: float = 0.0
 
 var _drawing_path: bool = false
 var _path_preview: PackedVector2Array = PackedVector2Array()
@@ -63,6 +70,7 @@ func _ready() -> void:
 	_load_unit_data()
 	_spawn_armies()
 	_apply_map()
+	_build_regiment_cards()
 
 	EventBus.unit_died.connect(_on_unit_died)
 	EventBus.battle_ended.connect(_on_battle_ended)
@@ -80,8 +88,12 @@ func _physics_process(delta: float) -> void:
 	if _path_timer <= 0.0:
 		_path_timer = 0.1
 		_update_path_lines()
-		if selected_units.size() > 1:
-			selection_box.queue_redraw()
+		selection_box.queue_redraw()
+
+	_card_timer -= delta
+	if _card_timer <= 0.0:
+		_card_timer = 0.2
+		_update_regiment_cards()
 
 	if _battle_over or not _enemy_ai_enabled:
 		return
@@ -176,8 +188,8 @@ func _setup_ui() -> void:
 	speed_label.anchor_bottom = 1.0
 	speed_label.offset_left = -430.0
 	speed_label.offset_right = -16.0
-	speed_label.offset_top = -48.0
-	speed_label.offset_bottom = -16.0
+	speed_label.offset_top = -160.0
+	speed_label.offset_bottom = -128.0
 	speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_style_overlay_label(speed_label, 15, Color(0.85, 0.88, 0.92))
 	canvas_layer.add_child(speed_label)
@@ -278,8 +290,10 @@ func _spawn_armies() -> void:
 		push_error("战斗配置不是有效的 JSON 对象")
 		return
 	_enemy_ai_enabled = GameSettings.ai_enabled
+	regiment_size = maxi(int(parsed.get("regiment_size", 10)), 1)
 	_spawn_groups(parsed.get("player", []), 0)
 	_spawn_groups(parsed.get("enemy", []), 1)
+	_build_regiments()
 
 
 func _spawn_groups(groups: Variant, team_id: int) -> void:
@@ -319,6 +333,72 @@ func _spawn_unit(type_name: String, team_id: int, position: Vector3) -> void:
 	units_by_id[unit.instance_id] = unit
 
 
+func _build_regiments() -> void:
+	player_regiments.clear()
+	enemy_regiments.clear()
+	regiments_by_id.clear()
+	for team_id in [0, 1]:
+		var team_regiments: Array[Regiment] = []
+		for type_name in ["spearman", "light_cavalry"]:
+			var type_units: Array[UnitBase] = []
+			for unit_id in range(next_unit_id):
+				if not units_by_id.has(unit_id):
+					continue
+				var unit: UnitBase = units_by_id[unit_id]
+				if unit.player_id == team_id and unit.data.id == StringName(type_name):
+					type_units.append(unit)
+			var index := 0
+			while index < type_units.size():
+				var regiment := Regiment.new()
+				regiment.id = "%s_%s_%d" % ["player" if team_id == 0 else "enemy", type_name, int(index / regiment_size) + 1]
+				regiment.player_id = team_id
+				regiment.unit_type_id = StringName(type_name)
+				regiment.icon_shape = type_units[index].data.shape
+				regiment.max_unit_hp = type_units[index].max_hp
+				regiment.display_name = "%s %s" % [
+					GameSettings.t("unit." + type_name),
+					_roman_numeral(int(index / regiment_size) + 1),
+				]
+				var end_index := mini(index + regiment_size, type_units.size())
+				for unit_index in range(index, end_index):
+					regiment.unit_ids.append(type_units[unit_index].instance_id)
+				team_regiments.append(regiment)
+				regiments_by_id[regiment.id] = regiment
+				index += regiment_size
+		if team_id == 0:
+			player_regiments = team_regiments
+		else:
+			enemy_regiments = team_regiments
+
+
+func _roman_numeral(value: int) -> String:
+	var numerals := ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+	return numerals[value - 1] if value >= 1 and value <= numerals.size() else str(value)
+
+
+func _build_regiment_cards() -> void:
+	if card_bar != null:
+		card_bar.queue_free()
+	card_bar = HBoxContainer.new()
+	card_bar.anchor_left = 0.5
+	card_bar.anchor_right = 0.5
+	card_bar.anchor_top = 1.0
+	card_bar.anchor_bottom = 1.0
+	card_bar.offset_left = -480.0
+	card_bar.offset_right = 480.0
+	card_bar.offset_top = -122.0
+	card_bar.offset_bottom = -18.0
+	card_bar.alignment = BoxContainer.ALIGNMENT_CENTER
+	card_bar.add_theme_constant_override("separation", 8)
+	canvas_layer.add_child(card_bar)
+	regiment_cards.clear()
+	for regiment in player_regiments:
+		var card := RegimentCard.new()
+		card.setup(regiment, ui_font, Color(0.25, 0.68, 1.0), regiment.display_name)
+		card.clicked.connect(_on_regiment_card_clicked)
+		card_bar.add_child(card)
+		regiment_cards[regiment.id] = card
+	_update_regiment_cards()
 func _apply_map() -> void:
 	var generator := MapGenerator.new()
 	generator.load_maps()
@@ -347,12 +427,29 @@ func _localized_map_text() -> String:
 
 
 func _select_single(unit: UnitBase) -> void:
-	selected_units = [unit]
+	var regiment := _regiment_for_unit(unit)
+	if regiment != null:
+		selected_units = regiment.alive_units(units_by_id)
+	else:
+		selected_units = [unit]
 	_refresh_selection()
 
 
 func _toggle_select(unit: UnitBase) -> void:
-	if unit in selected_units:
+	var regiment := _regiment_for_unit(unit)
+	if regiment != null:
+		var units := regiment.alive_units(units_by_id)
+		var all_selected := true
+		for member in units:
+			if not (member in selected_units):
+				all_selected = false
+				break
+		for member in units:
+			if all_selected:
+				selected_units.erase(member)
+			elif not (member in selected_units):
+				selected_units.append(member)
+	elif unit in selected_units:
 		selected_units.erase(unit)
 	else:
 		selected_units.append(unit)
@@ -371,8 +468,63 @@ func _refresh_selection() -> void:
 			unit.is_selected = unit in selected_units
 	EventBus.selection_changed.emit(selected_units.size())
 	_update_hud()
+	_update_regiment_cards()
 	if selection_box != null:
 		selection_box.queue_redraw()
+
+
+func _regiment_for_unit(unit: UnitBase) -> Regiment:
+	if unit == null:
+		return null
+	for regiment in player_regiments:
+		if unit.instance_id in regiment.unit_ids:
+			return regiment
+	return null
+
+
+func _regiment_selected(regiment: Regiment) -> bool:
+	var units := regiment.alive_units(units_by_id)
+	if units.is_empty():
+		return false
+	for unit in units:
+		if not (unit in selected_units):
+			return false
+	return true
+
+
+func _on_regiment_card_clicked(regiment_id: String, additive: bool) -> void:
+	var value: Variant = regiments_by_id.get(regiment_id)
+	if not (value is Regiment):
+		return
+	var regiment: Regiment = value
+	var units := regiment.alive_units(units_by_id)
+	if units.is_empty():
+		return
+	if additive:
+		var all_selected := _regiment_selected(regiment)
+		for unit in units:
+			if all_selected:
+				selected_units.erase(unit)
+			elif not (unit in selected_units):
+				selected_units.append(unit)
+	else:
+		selected_units = units
+	_refresh_selection()
+	GameSettings.play_click()
+
+
+func _update_regiment_cards() -> void:
+	for regiment_id in regiment_cards:
+		var card: RegimentCard = regiment_cards[regiment_id]
+		var value: Variant = regiments_by_id.get(regiment_id)
+		if not (value is Regiment):
+			continue
+		var regiment: Regiment = value
+		card.set_status(
+			regiment.alive_count(units_by_id),
+			regiment.hp_fraction(units_by_id),
+			_regiment_selected(regiment)
+		)
 
 
 func _box_select(from: Vector2, to: Vector2, additive: bool) -> void:
@@ -811,6 +963,7 @@ func _draw_selection_box() -> void:
 			selection_box.draw_line(from - normal * 10.0, from + normal * 10.0, Color(0.35, 0.9, 1.0, 0.95), 2.0)
 			selection_box.draw_line(to - normal * 10.0, to + normal * 10.0, Color(0.35, 0.9, 1.0, 0.95), 2.0)
 	_draw_formation_preview()
+	_draw_regiment_banners()
 
 
 func _draw_formation_preview() -> void:
@@ -846,6 +999,40 @@ func _draw_formation_preview() -> void:
 			]), color)
 		else:
 			selection_box.draw_circle(screen, 3.0, color)
+
+
+func _draw_regiment_banners() -> void:
+	if camera == null:
+		return
+	var all_regiments: Array[Regiment] = []
+	all_regiments.append_array(player_regiments)
+	all_regiments.append_array(enemy_regiments)
+	for regiment in all_regiments:
+		var units := regiment.alive_units(units_by_id)
+		if units.is_empty():
+			continue
+		var world_center := regiment.centroid(units_by_id) + Vector3(0.0, 0.55, 0.0)
+		if camera.is_position_behind(world_center):
+			continue
+		var screen := camera.unproject_position(world_center)
+		var color := Color(0.25, 0.68, 1.0) if regiment.player_id == 0 else Color(1.0, 0.3, 0.28)
+		var pole_top := screen + Vector2(0.0, -18.0)
+		selection_box.draw_line(screen, pole_top, Color(0.0, 0.0, 0.0, 0.7), 2.0)
+		var flag := PackedVector2Array([
+			pole_top,
+			pole_top + Vector2(16.0, 4.0),
+			pole_top + Vector2(0.0, 11.0),
+		])
+		selection_box.draw_colored_polygon(flag, color)
+		if regiment.player_id == 0 and _regiment_selected(regiment):
+			var outline := PackedVector2Array([flag[0], flag[1], flag[2], flag[0]])
+			selection_box.draw_polyline(outline, Color(1.0, 0.85, 0.3), 2.0)
+		var hp_bar_position := screen + Vector2(-10.0, 7.0)
+		selection_box.draw_rect(Rect2(hp_bar_position, Vector2(20.0, 2.0)), Color(0.0, 0.0, 0.0, 0.65))
+		selection_box.draw_rect(
+			Rect2(hp_bar_position, Vector2(20.0 * regiment.hp_fraction(units_by_id), 2.0)),
+			color
+		)
 
 
 func _draw_dashed(points: PackedVector2Array, color: Color, width: float) -> void:
@@ -940,6 +1127,7 @@ func _on_unit_died(unit: UnitBase) -> void:
 	EventBus.selection_changed.emit(selected_units.size())
 	_check_battle_end()
 	_update_hud()
+	_update_regiment_cards()
 
 
 func _check_battle_end() -> void:

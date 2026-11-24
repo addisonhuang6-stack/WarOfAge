@@ -1,4 +1,5 @@
 {
+	"regiment_size": 10,
 	"player": [
 		{
 			"type": "spearman",
