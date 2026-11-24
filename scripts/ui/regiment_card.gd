@@ -68,13 +68,30 @@ func _draw() -> void:
 	draw_rect(Rect2(0.0, 0.0, size.x, 3.0), team_color)
 
 	var icon_center := Vector2(22.0, 26.0)
-	draw_circle(icon_center, 11.0, Color(0.02, 0.03, 0.04, 1.0))
-	draw_circle(icon_center, 9.0, team_color)
-	draw_colored_polygon(PackedVector2Array([
-		icon_center + Vector2(0.0, -5.0),
-		icon_center + Vector2(-4.5, 4.0),
-		icon_center + Vector2(4.5, 4.0),
-	]), Color(0.97, 0.97, 0.95, 1.0))
+	if regiment != null and regiment.icon_shape == "triangle":
+		draw_colored_polygon(PackedVector2Array([
+			icon_center + Vector2(0.0, -12.0),
+			icon_center + Vector2(-10.0, 8.0),
+			icon_center + Vector2(10.0, 8.0),
+		]), Color(0.02, 0.03, 0.04, 1.0))
+		draw_colored_polygon(PackedVector2Array([
+			icon_center + Vector2(0.0, -9.0),
+			icon_center + Vector2(-7.5, 6.0),
+			icon_center + Vector2(7.5, 6.0),
+		]), team_color)
+		draw_colored_polygon(PackedVector2Array([
+			icon_center + Vector2(0.0, -4.0),
+			icon_center + Vector2(-3.0, 3.0),
+			icon_center + Vector2(3.0, 3.0),
+		]), Color(0.97, 0.97, 0.95, 1.0))
+	else:
+		draw_circle(icon_center, 11.0, Color(0.02, 0.03, 0.04, 1.0))
+		draw_circle(icon_center, 9.0, team_color)
+		draw_colored_polygon(PackedVector2Array([
+			icon_center + Vector2(0.0, -5.0),
+			icon_center + Vector2(-4.5, 4.0),
+			icon_center + Vector2(4.5, 4.0),
+		]), Color(0.97, 0.97, 0.95, 1.0))
 
 	if ui_font != null:
 		draw_string(ui_font, Vector2(39.0, 24.0), display_name, HORIZONTAL_ALIGNMENT_LEFT, 78.0, 13, Color(0.92, 0.94, 0.96))
