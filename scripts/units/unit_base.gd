@@ -50,12 +50,39 @@ var _speed: float = 0.0
 var _attack_cooldown: float = 0.0
 var _acquire_timer: float = 0.0
 
+var _move_acceleration: float = 3.0
+var _move_deceleration: float = 4.0
+var _turn_speed: float = 6.0
+var _min_turn_speed_scale: float = 0.3
+var _arrival_radius: float = 0.02
+var _arrival_speed: float = 0.14
+var _move_velocity: Vector3 = Vector3.ZERO
+var _desired_facing: Vector3 = Vector3.ZERO
+
+var _attack_phase: StringName = &"ready"
+var _attack_timer: float = 0.0
+var _attack_windup: float = 0.075
+var _attack_recovery: float = 0.105
+var _attack_hit_tolerance: float = 0.035
+var _pending_attack_target: UnitBase = null
+
 var _charge_elapsed: float = 0.0
 var _charge_speed: float = 0.0
 var _charge_hits: Dictionary = {}
 var _dust_timer: float = 0.0
 var _in_melee: bool = false
 var _shake_phase: float = 0.0
+var _gait_phase: float = 0.0
+var _dying: bool = false
+
+var _hit_flash_timer: float = 0.0
+const HIT_FLASH_DURATION := 0.075
+var _flash_active: bool = false
+var _flash_materials: Array[StandardMaterial3D] = []
+var _flash_base_colors: Dictionary = {}
+var _hit_recoil_timer: float = 0.0
+const HIT_RECOIL_DURATION := 0.13
+var _hit_recoil_direction: Vector3 = Vector3.ZERO
 
 var _marker: Node3D
 var _cracks: Node3D
@@ -70,6 +97,7 @@ func _ready() -> void:
 	EventBus.command_issued.connect(receive_command)
 	_apply_data()
 	facing = Vector3.LEFT if player_id == 1 else Vector3.RIGHT
+	_desired_facing = facing
 	_build_visuals()
 	_update_hp_bar()
 
@@ -79,7 +107,7 @@ func _exit_tree() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if hp <= 0.0:
+	if hp <= 0.0 or _dying:
 		return
 
 	_in_melee = false
@@ -100,7 +128,7 @@ func _physics_process(delta: float) -> void:
 			if melee_target == null:
 				_try_engage_enemy()
 			if melee_target != null:
-				_process_melee(delta)
+				_process_melee()
 			else:
 				# 待命状态：只攻击射程内的敌人，绝不自主移动。
 				if _acquire_timer <= 0.0:
@@ -110,14 +138,17 @@ func _physics_process(delta: float) -> void:
 					current_target = null
 				if current_target != null:
 					if _is_target_engageable(current_target):
-						if _attack_cooldown <= 0.0:
-							_attack(current_target)
+						if _attack_phase == &"ready" and _attack_cooldown <= 0.0:
+							_begin_attack(current_target)
 					else:
 						current_target = null
-		_apply_separation(delta)
+			_settle_move_facing()
 
+	_advance_attack(delta)
+	_apply_separation(delta)
+	_update_facing(delta)
 	_update_marker_rotation()
-	_update_combat_shake(delta)
+	_update_visual_feedback(delta)
 
 
 ## 命令模式入口：所有行为都经由 Command 下发。
@@ -129,6 +160,7 @@ func receive_command(command: Command) -> void:
 	match command.type:
 		&"move":
 			_cancel_charge()
+			_cancel_attack_state()
 			melee_target = null
 			current_target = null
 			move_points.clear()
@@ -139,14 +171,20 @@ func receive_command(command: Command) -> void:
 				move_points.append(command.target_position)
 			else:
 				move_points.assign(command.waypoints)
+			var first_direction := move_points[0] - global_position
+			first_direction.y = 0.0
+			if first_direction.length() > 0.001:
+				_desired_facing = first_direction.normalized()
 		&"charge":
+			_cancel_attack_state()
 			_start_charge()
 
 
-func take_damage(amount: float, _attacker: UnitBase) -> void:
-	if hp <= 0.0:
+func take_damage(amount: float, attacker: UnitBase) -> void:
+	if hp <= 0.0 or _dying:
 		return
 	hp = maxf(hp - amount, 0.0)
+	_trigger_hit_reaction(attacker, amount)
 	_update_hp_bar()
 	_update_cracks()
 	if hp <= 0.0:
@@ -164,6 +202,15 @@ func _apply_data() -> void:
 	hp = max_hp
 	_speed = float(data.get_stat(&"speed", 0.0))
 	radius = float(data.get_stat(&"radius", 0.5))
+	_move_acceleration = maxf(float(data.get_stat(&"move_acceleration", 3.0)), 0.1)
+	_move_deceleration = maxf(float(data.get_stat(&"move_deceleration", 4.0)), 0.1)
+	_turn_speed = maxf(float(data.get_stat(&"turn_speed", 6.0)), 0.1)
+	_min_turn_speed_scale = clampf(float(data.get_stat(&"min_turn_speed_scale", 0.3)), 0.05, 1.0)
+	_arrival_radius = maxf(float(data.get_stat(&"arrival_radius", 0.02)), 0.001)
+	_arrival_speed = maxf(float(data.get_stat(&"arrival_speed", 0.14)), 0.01)
+	_attack_windup = maxf(float(data.get_stat(&"attack_windup", 0.075)), 0.01)
+	_attack_recovery = maxf(float(data.get_stat(&"attack_recovery", 0.105)), 0.01)
+	_attack_hit_tolerance = maxf(float(data.get_stat(&"attack_hit_tolerance", 0.035)), 0.0)
 
 
 func _build_visuals() -> void:
@@ -179,10 +226,30 @@ func _build_visuals() -> void:
 	add_child(_marker)
 	var team_color := Color(0.25, 0.68, 1.0) if player_id == 0 else Color(1.0, 0.3, 0.28)
 	var outline := Color(0.04, 0.06, 0.08)
-	if data != null and data.shape == "triangle":
-		_add_flat_triangle(_marker, radius * 2.9, radius * 2.2, outline, 0.025)
-		_add_flat_triangle(_marker, radius * 2.5, radius * 1.9, team_color, 0.035)
+	var silhouette := data.silhouette if data != null else ""
+	if silhouette == "cavalry" or (silhouette.is_empty() and data != null and data.shape == "triangle"):
+		# 骑兵保留三角军标，但拉长轮廓，形成明显向前的骑乘/冲刺姿态。
+		_add_flat_triangle(_marker, radius * 4.1, radius * 2.45, outline, 0.025)
+		_add_flat_triangle(_marker, radius * 3.65, radius * 2.05, team_color, 0.035)
+		_add_flat_triangle(_marker, radius * 1.15, radius * 0.55, Color(0.97, 0.97, 0.95), 0.045)
 	else:
+		# 步兵用圆阵表示队形，并用超出圆阵的长矛提供远距离可读的兵种轮廓。
+		var spear_outline_width := maxf(radius * 0.2, 0.011)
+		var spear_width := maxf(radius * 0.1, 0.006)
+		_add_flat_box(
+			_marker,
+			Vector3(spear_outline_width, 0.018, radius * 3.6),
+			outline,
+			0.022,
+			radius * 1.15
+		)
+		_add_flat_box(
+			_marker,
+			Vector3(spear_width, 0.024, radius * 3.5),
+			Color(0.82, 0.85, 0.82),
+			0.034,
+			radius * 1.2
+		)
 		_add_flat_disc(_marker, radius * 1.15, outline, 0.02)
 		_add_flat_disc(_marker, radius, team_color, 0.03)
 		_add_flat_triangle(_marker, radius * 0.9, radius * 0.65, Color(0.96, 0.96, 0.96), 0.045)
@@ -244,11 +311,31 @@ func _add_flat_triangle(parent: Node3D, length: float, width: float, color: Colo
 	return instance
 
 
+func _add_flat_box(
+	parent: Node3D,
+	box_size: Vector3,
+	color: Color,
+	y: float,
+	z: float
+) -> MeshInstance3D:
+	var instance := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = box_size
+	instance.mesh = mesh
+	instance.material_override = _flat_material(color)
+	instance.position = Vector3(0.0, y, z)
+	parent.add_child(instance)
+	return instance
+
+
 func _flat_material(color: Color) -> StandardMaterial3D:
 	var material := StandardMaterial3D.new()
 	material.albedo_color = color
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_flash_materials.append(material)
+	_flash_base_colors[material] = color
 	return material
 
 
@@ -292,14 +379,91 @@ func _update_hp_bar() -> void:
 func _follow_path(delta: float) -> void:
 	while not move_points.is_empty():
 		var next_point: Vector3 = move_points[0]
-		if global_position.distance_to(next_point) <= 0.15:
+		var from := Vector3(global_position.x, 0.0, global_position.z)
+		var to := Vector3(next_point.x, 0.0, next_point.z)
+		var distance := from.distance_to(to)
+		var is_final := move_points.size() == 1
+		var stopped_enough := _move_velocity.length() <= maxf(_speed * 0.035, 0.06)
+		var waypoint_radius := _arrival_radius + maxf(_move_velocity.length() * delta, 0.001)
+		if not is_final:
+			waypoint_radius = maxf(waypoint_radius, _move_velocity.length() * delta * 1.2)
+		if distance <= waypoint_radius and (not is_final or stopped_enough):
+			global_position = to
 			move_points.pop_front()
-			if move_points.is_empty() and hold_facing.length() > 0.001:
-				facing = hold_facing
-				hold_facing = Vector3.ZERO
+			if is_final:
+				_move_velocity = Vector3.ZERO
+				_settle_move_facing()
 			continue
-		_move_position(delta, next_point)
+		_move_position(delta, to, is_final)
 		return
+	_move_velocity = _move_velocity.move_toward(Vector3.ZERO, _move_deceleration * delta)
+	_settle_move_facing()
+
+
+func _move_position(delta: float, target: Vector3, is_final: bool) -> void:
+	var from := Vector3(global_position.x, 0.0, global_position.z)
+	var offset := target - from
+	var distance := offset.length()
+	if distance <= 0.0001:
+		_move_velocity = Vector3.ZERO
+		return
+
+	var direction := offset / distance
+	_desired_facing = direction
+	var forward := Vector3(facing.x, 0.0, facing.z)
+	if forward.length() < 0.001:
+		forward = direction
+	var alignment := clampf(forward.normalized().dot(direction), 0.0, 1.0)
+	var desired_speed := _speed * lerpf(_min_turn_speed_scale, 1.0, alignment)
+	if is_final:
+		# 在理论制动距离之外再留出转向/速度插值的余量；越接近终点，
+		# 允许速度以 smoothstep 收束，避免最后一帧仍有明显滑速。
+		var braking_window := maxf(_speed * _speed / (2.0 * _move_deceleration) * 1.4, 0.1)
+		var braking_ratio := clampf((distance - _arrival_radius) / braking_window, 0.0, 1.0)
+		desired_speed = minf(desired_speed, _speed * smoothstep(0.0, 1.0, braking_ratio))
+		var terminal_speed := minf(_arrival_speed, maxf(distance - _arrival_radius, 0.0) / 0.16)
+		desired_speed = maxf(desired_speed, terminal_speed)
+
+	# 位移沿路径加速，朝向独立慢速追随；因此转向需要时间，但不会为了转身绕圈。
+	var desired_velocity := direction * desired_speed
+	var rate := _move_acceleration
+	if _move_velocity.length() > desired_velocity.length() or _move_velocity.dot(desired_velocity) < 0.0:
+		rate = _move_deceleration
+	_move_velocity = _move_velocity.move_toward(desired_velocity, rate * delta)
+
+	var step := _move_velocity * delta
+	if is_final and step.length() >= distance and _move_velocity.dot(direction) > 0.0:
+		global_position = target
+		_move_velocity = Vector3.ZERO
+		move_points.pop_front()
+		_settle_move_facing()
+		return
+	global_position = from + step
+
+
+func _settle_move_facing() -> void:
+	if not move_points.is_empty() or hold_facing.length() < 0.001:
+		return
+	_desired_facing = hold_facing
+	if facing.angle_to(hold_facing) <= 0.025:
+		facing = hold_facing
+		hold_facing = Vector3.ZERO
+
+
+func _update_facing(delta: float) -> void:
+	if _desired_facing.length() < 0.001:
+		return
+	var flat_facing := Vector3(facing.x, 0.0, facing.z)
+	var flat_desired := Vector3(_desired_facing.x, 0.0, _desired_facing.z).normalized()
+	if flat_facing.length() < 0.001:
+		facing = flat_desired
+		return
+	var current_angle := atan2(flat_facing.x, flat_facing.z)
+	var target_angle := atan2(flat_desired.x, flat_desired.z)
+	var angle_delta := wrapf(target_angle - current_angle, -PI, PI)
+	var max_turn := _turn_speed * delta
+	var next_angle := current_angle + clampf(angle_delta, -max_turn, max_turn)
+	facing = Vector3(sin(next_angle), 0.0, cos(next_angle))
 
 
 func _is_target_engageable(target: UnitBase) -> bool:
@@ -310,21 +474,56 @@ func _is_target_engageable(target: UnitBase) -> bool:
 	return _is_contact_with(target)
 
 
-func _attack(target: UnitBase) -> void:
-	_in_melee = true
+func _begin_attack(target: UnitBase) -> void:
+	if _attack_phase != &"ready" or target == null:
+		return
+	if not is_instance_valid(target) or target.hp <= 0.0 or not _is_contact_with(target):
+		return
+	_attack_phase = &"windup"
+	_attack_timer = 0.0
+	_pending_attack_target = target
+	current_target = target
+	melee_target = target
+	_attack_cooldown = float(data.get_stat(&"attack_interval", 1.0))
 	var flat_to_target := Vector3(target.global_position.x - global_position.x, 0.0, target.global_position.z - global_position.z)
-	var hold_facing := _holds_facing_in_combat()
-	var facing_before := facing
-	if not hold_facing and flat_to_target.length() > 0.001:
-		facing = flat_to_target.normalized()
-	var attack_facing := facing_before if hold_facing else facing
+	if not _holds_facing_in_combat() and flat_to_target.length() > 0.001:
+		_desired_facing = flat_to_target.normalized()
+
+
+func _advance_attack(delta: float) -> void:
+	if _attack_phase == &"ready":
+		return
+	_attack_timer += delta
+	if _attack_phase == &"windup" and _attack_timer >= _attack_windup:
+		_resolve_attack_hit()
+		_attack_phase = &"recovery"
+		_attack_timer = 0.0
+	elif _attack_phase == &"recovery" and _attack_timer >= _attack_recovery:
+		_attack_phase = &"ready"
+		_attack_timer = 0.0
+		_pending_attack_target = null
+
+
+func _resolve_attack_hit() -> void:
+	var target := _pending_attack_target
+	if target == null or not is_instance_valid(target) or target.hp <= 0.0:
+		return
+	var hit_distance := radius + target.radius + CONTACT_TOLERANCE + _attack_hit_tolerance
+	if horizontal_distance_to(target) > hit_distance:
+		return
 	var is_counter: bool = CombatSystem.counter_multiplier(data, target.data) > 1.0
 	var damage: float = CombatSystem.compute_damage(
-		data, target.data, global_position, target.global_position, target.facing, attack_facing
+		data, target.data, global_position, target.global_position, target.facing, facing
 	)
 	target.take_damage(damage, self)
 	EventBus.unit_attacked.emit(self, target, damage, is_counter)
-	_attack_cooldown = float(data.get_stat(&"attack_interval", 1.0))
+
+
+func _cancel_attack_state() -> void:
+	_attack_phase = &"ready"
+	_attack_timer = 0.0
+	_pending_attack_target = null
+	_attack_cooldown = 0.0
 
 
 func _acquire_target() -> void:
@@ -394,13 +593,15 @@ func _try_engage_enemy() -> void:
 	current_target = best
 
 
-func _process_melee(_delta: float) -> void:
+func _process_melee() -> void:
 	if melee_target == null or not is_instance_valid(melee_target) or melee_target.hp <= 0.0:
 		melee_target = null
 		current_target = null
 		return
+	_in_melee = _is_contact_with(melee_target)
+	if _attack_phase != &"ready":
+		return
 	var contacts := _find_contact_enemies()
-	_in_melee = not contacts.is_empty()
 	if contacts.is_empty():
 		var leash := float(data.get_stat(&"leash_radius", 0.9))
 		if horizontal_distance_to(melee_target) > leash:
@@ -411,8 +612,8 @@ func _process_melee(_delta: float) -> void:
 		melee_target = contacts[0]
 		current_target = contacts[0]
 	if _attack_cooldown <= 0.0:
-		for target in contacts:
-			_attack(target)
+		# 每次起手只锁定一个主目标；接触其他敌人不会在同一节拍内分摊攻击。
+		_begin_attack(melee_target)
 
 
 func _is_contact_with(target: UnitBase) -> bool:
@@ -444,32 +645,71 @@ func _find_contact_enemies() -> Array[UnitBase]:
 	return contacts
 
 
-func _update_combat_shake(delta: float) -> void:
-	if _marker == null:
+func _update_visual_feedback(delta: float) -> void:
+	if _marker == null or _dying:
 		return
 	_shake_phase += delta * 55.0
+	_gait_phase += delta * (8.0 + _move_velocity.length() * 5.0)
+	var marker_offset := Vector3.ZERO
 	if _in_melee:
 		var amount := radius * 0.45
-		_marker.position = Vector3(
+		marker_offset += Vector3(
 			sin(_shake_phase * 1.9) * amount,
 			0.0,
 			cos(_shake_phase * 2.7) * amount
 		)
+	var speed_fraction := clampf(_move_velocity.length() / maxf(_speed, 0.001), 0.0, 1.0)
+	marker_offset.y = absf(sin(_gait_phase)) * radius * 0.09 * speed_fraction
+
+	if _attack_phase == &"windup":
+		var windup := clampf(_attack_timer / _attack_windup, 0.0, 1.0)
+		marker_offset.z = -radius * 0.32 * windup
+	elif _attack_phase == &"recovery":
+		var recovery := clampf(_attack_timer / _attack_recovery, 0.0, 1.0)
+		marker_offset.z = radius * 0.72 * (1.0 - recovery)
+
+	if _hit_recoil_timer > 0.0:
+		_hit_recoil_timer = maxf(_hit_recoil_timer - delta, 0.0)
+		var recoil := radius * 0.9 * (_hit_recoil_timer / HIT_RECOIL_DURATION)
+		var right := Vector3(-facing.z, 0.0, facing.x)
+		marker_offset.x += _hit_recoil_direction.dot(right) * recoil
+		marker_offset.z += _hit_recoil_direction.dot(facing) * recoil
+	_marker.position = marker_offset
+
+	if _hit_flash_timer > 0.0:
+		_flash_active = true
+		_hit_flash_timer = maxf(_hit_flash_timer - delta, 0.0)
+		var flash := clampf(_hit_flash_timer / HIT_FLASH_DURATION, 0.0, 1.0)
+		for material in _flash_materials:
+			var base_color: Color = _flash_base_colors.get(material, material.albedo_color)
+			material.albedo_color = base_color.lerp(Color(1.0, 0.98, 0.82), flash * 0.9)
+	elif _flash_active:
+		_restore_flash_colors()
+
+
+func _restore_flash_colors() -> void:
+	for material in _flash_materials:
+		material.albedo_color = _flash_base_colors.get(material, material.albedo_color)
+	_flash_active = false
+
+
+func _trigger_hit_reaction(attacker: UnitBase, amount: float) -> void:
+	_hit_flash_timer = HIT_FLASH_DURATION
+	_hit_recoil_timer = HIT_RECOIL_DURATION
+	if attacker != null and is_instance_valid(attacker):
+		_hit_recoil_direction = Vector3(
+			global_position.x - attacker.global_position.x,
+			0.0,
+			global_position.z - attacker.global_position.z
+		)
+		if _hit_recoil_direction.length() > 0.001:
+			_hit_recoil_direction = _hit_recoil_direction.normalized()
+		else:
+			_hit_recoil_direction = -facing
 	else:
-		_marker.position = _marker.position.lerp(Vector3.ZERO, minf(delta * 14.0, 1.0))
-
-
-func _move_position(delta: float, target: Vector3, rotate_facing: bool = true) -> void:
-	var from := Vector3(global_position.x, 0.0, global_position.z)
-	var to := Vector3(target.x, 0.0, target.z)
-	var offset := to - from
-	if offset.length() <= 0.001:
-		return
-	var direction := offset.normalized()
-	if rotate_facing:
-		facing = direction
-	var step := _speed * delta
-	global_position = from + direction * minf(step, offset.length())
+		_hit_recoil_direction = -facing
+	# 重击略微加长可读性，但上限保持短促，避免战斗动作拖慢。
+	_hit_recoil_timer = minf(HIT_RECOIL_DURATION + amount * 0.001, 0.18)
 
 
 func _apply_separation(delta: float) -> void:
@@ -504,8 +744,8 @@ func _apply_separation(delta: float) -> void:
 				push += away.normalized() * (min_distance - distance)
 	if push != Vector3.ZERO:
 		var strength: float = float(data.get_stat(&"separation_strength", 2.0))
-		# 快速消除重叠：每帧至少修正 35% 的穿插深度，最多 75%。
-		var correction := clampf(maxf(strength * delta * 12.0, 0.35), 0.0, 0.75)
+		# 只做小步、连续的位置修正，避免分离系统把单位瞬移或来回抖动。
+		var correction := clampf(strength * delta * 5.0, 0.0, 0.18)
 		global_position += push * correction
 
 
@@ -548,6 +788,8 @@ func _start_charge() -> void:
 	current_target = null
 	move_points.clear()
 	hold_facing = Vector3.ZERO
+	_move_velocity = Vector3.ZERO
+	_desired_facing = facing
 	is_charging = true
 	_charge_elapsed = 0.0
 	_charge_speed = _speed
@@ -622,6 +864,9 @@ func _handle_charge_collisions(flat_facing: Vector3, from: Vector3) -> void:
 		_charge_hits[unit.instance_id] = true
 		var charge_damage := CombatSystem.compute_charge_damage(data, unit.data, momentum)
 		unit.take_damage(charge_damage, self)
+		EventBus.unit_attacked.emit(self, unit, charge_damage, false)
+		var impact_strength := clampf(momentum / 10.0, 0.25, 1.0)
+		EventBus.charge_impact.emit(unit.global_position, impact_strength)
 		if momentum - target_toughness > 0.0 and is_instance_valid(unit) and unit.hp > 0.0:
 			var push_scale := float(data.get_stat(&"charge_push_scale", 0.16))
 			var push_distance := clampf((momentum - target_toughness) * push_scale, 0.03, 0.08)
@@ -672,7 +917,31 @@ func _add_crack(index: int) -> void:
 
 
 func _die() -> void:
+	if _dying:
+		return
+	_dying = true
+	hp = 0.0
 	set_physics_process(false)
 	registry.erase(self)
 	EventBus.unit_died.emit(self)
-	queue_free()
+	if _selection_marker != null:
+		_selection_marker.visible = false
+	if _hp_bar_bg != null:
+		_hp_bar_bg.visible = false
+	if _hp_bar_fill != null:
+		_hp_bar_fill.visible = false
+	if _marker == null:
+		queue_free()
+		return
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(_marker, "scale", Vector3(1.08, 0.62, 0.24), 0.28) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_property(_marker, "rotation:z", deg_to_rad(72.0), 0.28) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_property(_marker, "position:y", -radius * 0.18, 0.28)
+	for material in _flash_materials:
+		tween.tween_property(material, "albedo_color:a", 0.0, 0.25)
+	if _cracks != null:
+		tween.tween_property(_cracks, "scale", Vector3(0.35, 1.0, 0.35), 0.24)
+	tween.chain().tween_callback(queue_free)

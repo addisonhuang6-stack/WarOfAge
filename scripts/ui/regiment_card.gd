@@ -69,22 +69,45 @@ func _draw() -> void:
 
 	var icon_center := Vector2(22.0, 26.0)
 	if regiment != null and regiment.icon_shape == "triangle":
+		# 轻骑兵：拉长三角形与两条速度线，不画步兵圆阵。
+		draw_line(
+			icon_center + Vector2(-10.0, 7.0),
+			icon_center + Vector2(-16.0, 7.0),
+			Color(0.72, 0.8, 0.86, 0.75),
+			2.0
+		)
+		draw_line(
+			icon_center + Vector2(-8.0, 13.0),
+			icon_center + Vector2(-15.0, 13.0),
+			Color(0.72, 0.8, 0.86, 0.55),
+			2.0
+		)
 		draw_colored_polygon(PackedVector2Array([
-			icon_center + Vector2(0.0, -12.0),
-			icon_center + Vector2(-10.0, 8.0),
-			icon_center + Vector2(10.0, 8.0),
+			icon_center + Vector2(0.0, -17.0),
+			icon_center + Vector2(-10.0, 12.0),
+			icon_center + Vector2(10.0, 12.0),
 		]), Color(0.02, 0.03, 0.04, 1.0))
 		draw_colored_polygon(PackedVector2Array([
-			icon_center + Vector2(0.0, -9.0),
-			icon_center + Vector2(-7.5, 6.0),
-			icon_center + Vector2(7.5, 6.0),
+			icon_center + Vector2(0.0, -13.5),
+			icon_center + Vector2(-7.5, 9.0),
+			icon_center + Vector2(7.5, 9.0),
 		]), team_color)
 		draw_colored_polygon(PackedVector2Array([
-			icon_center + Vector2(0.0, -4.0),
-			icon_center + Vector2(-3.0, 3.0),
-			icon_center + Vector2(3.0, 3.0),
+			icon_center + Vector2(0.0, -5.0),
+			icon_center + Vector2(-2.8, 2.5),
+			icon_center + Vector2(2.8, 2.5),
 		]), Color(0.97, 0.97, 0.95, 1.0))
 	else:
+		# 长矛兵：圆阵中央向前的长兵器是第一识别轮廓。
+		var spear_base := icon_center + Vector2(-1.5, 14.0)
+		var spear_tip := icon_center + Vector2(1.5, -22.0)
+		draw_line(spear_base, spear_tip, Color(0.02, 0.03, 0.04, 1.0), 4.0)
+		draw_line(spear_base, spear_tip, Color(0.82, 0.85, 0.82, 1.0), 2.0)
+		draw_colored_polygon(PackedVector2Array([
+			spear_tip + Vector2(0.0, -3.5),
+			spear_tip + Vector2(-2.5, 1.5),
+			spear_tip + Vector2(2.5, 1.5),
+		]), Color(0.9, 0.92, 0.9, 1.0))
 		draw_circle(icon_center, 11.0, Color(0.02, 0.03, 0.04, 1.0))
 		draw_circle(icon_center, 9.0, team_color)
 		draw_colored_polygon(PackedVector2Array([

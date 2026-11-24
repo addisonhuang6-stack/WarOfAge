@@ -23,6 +23,9 @@ extends Resource
 ## 单位在地图上的几何形状：circle（圆+内三角）或 triangle。
 @export var shape: String = "circle"
 
+## 战场极简轮廓：spear（圆形+长兵器）或 cavalry（拉长三角形）。
+@export var silhouette: String = ""
+
 
 ## 从 JSON 字典构建数据对象，缺失字段使用默认值。
 static func from_dict(data: Dictionary) -> UnitData:
@@ -31,6 +34,7 @@ static func from_dict(data: Dictionary) -> UnitData:
 	unit.name = str(data.get("name", ""))
 	unit.texture_path = str(data.get("texture", ""))
 	unit.shape = str(data.get("shape", "circle"))
+	unit.silhouette = str(data.get("silhouette", ""))
 
 	var raw_tags: Variant = data.get("tags", [])
 	if raw_tags is Array:

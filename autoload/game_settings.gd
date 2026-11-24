@@ -7,6 +7,8 @@ const SETTINGS_PATH := "user://settings.cfg"
 const CLICK_SOUND_PATH := "res://assets/audio/click.wav"
 const START_SOUND_PATH := "res://assets/audio/start.wav"
 const GAME_SPEEDS := [0.25, 0.5, 1.0, 2.0, 3.0]
+const SFX_SAMPLE_RATE := 22050
+const SFX_PLAYER_COUNT := 4
 
 const TEXTS := {
 	"zh": {
@@ -101,19 +103,51 @@ var game_speed: float = 1.0
 var paused: bool = false
 var selected_map: String = "random"
 
-var _audio_player: AudioStreamPlayer
+var _audio_players: Array[AudioStreamPlayer] = []
+var _audio_cursor: int = 0
 var _click_stream: AudioStream
 var _start_stream: AudioStream
+var _move_confirm_stream: AudioStreamWAV
+var _melee_hit_stream: AudioStreamWAV
+var _unit_death_stream: AudioStreamWAV
+var _charge_impact_stream: AudioStreamWAV
+var _audio_stopped: bool = false
 
 
 func _ready() -> void:
-	_audio_player = AudioStreamPlayer.new()
-	add_child(_audio_player)
+	for _index in range(SFX_PLAYER_COUNT):
+		var player := AudioStreamPlayer.new()
+		player.bus = &"Master"
+		add_child(player)
+		_audio_players.append(player)
 	_click_stream = load(CLICK_SOUND_PATH)
 	_start_stream = load(START_SOUND_PATH)
+	_build_placeholder_sounds()
 	_load_settings()
 	_apply_audio()
 	_apply_game_speed()
+	get_tree().root.tree_exiting.connect(_stop_all_audio)
+
+
+func _exit_tree() -> void:
+	_stop_all_audio()
+
+
+func _stop_all_audio() -> void:
+	if _audio_stopped:
+		return
+	_audio_stopped = true
+	for player in _audio_players:
+		if is_instance_valid(player):
+			player.stop()
+			player.stream = null
+	_audio_players.clear()
+	_click_stream = null
+	_start_stream = null
+	_move_confirm_stream = null
+	_melee_hit_stream = null
+	_unit_death_stream = null
+	_charge_impact_stream = null
 
 
 func t(key: String) -> String:
@@ -208,11 +242,83 @@ func play_start() -> void:
 	_play(_start_stream)
 
 
-func _play(stream: AudioStream) -> void:
-	if not sound_enabled or stream == null or _audio_player == null:
+func play_move_confirm(pitch_scale: float = 1.0) -> void:
+	_play(_move_confirm_stream, pitch_scale * randf_range(0.98, 1.04), -3.0)
+
+
+func play_melee_hit(is_counter: bool = false) -> void:
+	var pitch := randf_range(0.9, 1.06)
+	if is_counter:
+		pitch *= 1.08
+	_play(_melee_hit_stream, pitch, -1.5)
+
+
+func play_unit_death() -> void:
+	_play(_unit_death_stream, randf_range(0.92, 1.02), -3.0)
+
+
+func play_charge_impact() -> void:
+	_play(_charge_impact_stream, randf_range(0.94, 1.02), 0.5)
+
+
+func _play(stream: AudioStream, pitch: float = 1.0, volume_db: float = 0.0) -> void:
+	if not sound_enabled or stream == null or _audio_players.is_empty():
 		return
-	_audio_player.stream = stream
-	_audio_player.play()
+	if DisplayServer.get_name() == "headless":
+		return
+	var player: AudioStreamPlayer = null
+	for candidate in _audio_players:
+		if not candidate.playing:
+			player = candidate
+			break
+	if player == null:
+		player = _audio_players[_audio_cursor]
+		_audio_cursor = (_audio_cursor + 1) % _audio_players.size()
+	player.stream = stream
+	player.pitch_scale = pitch
+	player.volume_db = volume_db
+	player.play()
+
+
+func _build_placeholder_sounds() -> void:
+	# 所有战斗占位音效均由简单波形实时合成，不依赖外部版权素材。
+	_move_confirm_stream = _make_placeholder_tone(0.085, 320.0, 540.0, 0.2, 0.02, 3.0)
+	_melee_hit_stream = _make_placeholder_tone(0.105, 165.0, 68.0, 0.5, 0.48, 6.0)
+	_unit_death_stream = _make_placeholder_tone(0.28, 220.0, 72.0, 0.38, 0.18, 2.2)
+	_charge_impact_stream = _make_placeholder_tone(0.22, 92.0, 38.0, 0.68, 0.62, 3.4)
+
+
+func _make_placeholder_tone(
+	duration: float,
+	start_frequency: float,
+	end_frequency: float,
+	amplitude: float,
+	noise_amount: float,
+	decay_power: float
+) -> AudioStreamWAV:
+	var sample_count := maxi(int(duration * SFX_SAMPLE_RATE), 1)
+	var bytes := PackedByteArray()
+	bytes.resize(sample_count * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(start_frequency * 1009.0 + end_frequency * 917.0 + duration * 100000.0)
+	var phase := 0.0
+	var attack_samples := maxi(int(0.004 * SFX_SAMPLE_RATE), 1)
+	for i in range(sample_count):
+		var progress := float(i) / float(sample_count)
+		var frequency := lerpf(start_frequency, end_frequency, progress)
+		phase += TAU * frequency / float(SFX_SAMPLE_RATE)
+		var envelope := pow(maxf(1.0 - progress, 0.0), decay_power)
+		if i < attack_samples:
+			envelope *= float(i) / float(attack_samples)
+		var noise := rng.randf_range(-1.0, 1.0)
+		var sample := (sin(phase) * (1.0 - noise_amount * 0.55) + noise * noise_amount) * amplitude * envelope
+		bytes.encode_s16(i * 2, int(clampf(sample, -1.0, 1.0) * 32767.0))
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = SFX_SAMPLE_RATE
+	stream.stereo = false
+	stream.data = bytes
+	return stream
 
 
 func _apply_audio() -> void:

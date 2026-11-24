@@ -9,8 +9,20 @@ const CAMERA_ZOOM_MIN := 3.0
 const CAMERA_ZOOM_MAX := 14.0
 const CAMERA_BOUNDS_MIN := Vector2(-9.0, -6.0)
 const CAMERA_BOUNDS_MAX := Vector2(9.0, 6.0)
+const CAMERA_POSITION_SMOOTH := 16.0
+const CAMERA_ZOOM_SMOOTH := 12.0
+const CAMERA_KEYBOARD_SMOOTH := 9.0
 
 var camera: Camera3D
+var _camera_target_size: float = 5.0
+var _camera_target_position := Vector3(0.0, 10.0, 0.0)
+var _camera_base_position := Vector3(0.0, 10.0, 0.0)
+var _camera_keyboard_velocity := Vector2.ZERO
+var _camera_shake_time: float = 0.0
+var _camera_shake_strength: float = 0.0
+var _camera_shake_phase: float = 0.0
+var _last_hit_sound_msec: int = -1000
+var _last_death_sound_msec: int = -1000
 var canvas_layer: CanvasLayer
 var selection_box: Control
 var instruction_label: Label
@@ -73,8 +85,10 @@ func _ready() -> void:
 	_build_regiment_cards()
 
 	EventBus.unit_died.connect(_on_unit_died)
+	EventBus.unit_attacked.connect(_on_unit_attacked)
 	EventBus.battle_ended.connect(_on_battle_ended)
 	EventBus.charge_dust.connect(_on_charge_dust)
+	EventBus.charge_impact.connect(_on_charge_impact)
 
 	_update_hud()
 	GameSettings.changed.connect(_update_speed_hud)
@@ -83,6 +97,7 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	_handle_keyboard_pan(delta)
+	_update_camera(delta)
 
 	_path_timer -= delta
 	if _path_timer <= 0.0:
@@ -110,6 +125,9 @@ func _setup_world() -> void:
 	camera.position = Vector3(0.0, 10.0, 0.0)
 	camera.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
 	add_child(camera)
+	_camera_target_size = camera.size
+	_camera_target_position = camera.position
+	_camera_base_position = camera.position
 
 	var light := DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-65.0, -35.0, 0.0)
@@ -230,11 +248,43 @@ func _handle_keyboard_pan(delta: float) -> void:
 		direction.y -= 1.0
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
 		direction.y += 1.0
-	if direction == Vector2.ZERO:
+	if direction.length_squared() > 1.0:
+		direction = direction.normalized()
+	var target_velocity := direction * _camera_target_size * 0.75
+	var blend := 1.0 - exp(-CAMERA_KEYBOARD_SMOOTH * delta)
+	_camera_keyboard_velocity = _camera_keyboard_velocity.lerp(target_velocity, blend)
+	_camera_target_position.x = clampf(
+		_camera_target_position.x + _camera_keyboard_velocity.x * delta,
+		CAMERA_BOUNDS_MIN.x,
+		CAMERA_BOUNDS_MAX.x
+	)
+	_camera_target_position.z = clampf(
+		_camera_target_position.z + _camera_keyboard_velocity.y * delta,
+		CAMERA_BOUNDS_MIN.y,
+		CAMERA_BOUNDS_MAX.y
+	)
+
+
+func _update_camera(delta: float) -> void:
+	if camera == null:
 		return
-	var pan_speed := camera.size * 0.7
-	camera.position.x = clampf(camera.position.x + direction.x * pan_speed * delta, CAMERA_BOUNDS_MIN.x, CAMERA_BOUNDS_MAX.x)
-	camera.position.z = clampf(camera.position.z + direction.y * pan_speed * delta, CAMERA_BOUNDS_MIN.y, CAMERA_BOUNDS_MAX.y)
+	var position_blend := 1.0 - exp(-CAMERA_POSITION_SMOOTH * delta)
+	var zoom_blend := 1.0 - exp(-CAMERA_ZOOM_SMOOTH * delta)
+	_camera_base_position = _camera_base_position.lerp(_camera_target_position, position_blend)
+	camera.size = lerpf(camera.size, _camera_target_size, zoom_blend)
+	camera.position = _camera_base_position
+	if _camera_shake_time <= 0.0:
+		_camera_shake_strength = 0.0
+		return
+	_camera_shake_time = maxf(_camera_shake_time - delta, 0.0)
+	_camera_shake_phase += delta * 62.0
+	var fade := clampf(_camera_shake_time / 0.16, 0.0, 1.0)
+	var amount := _camera_shake_strength * fade
+	camera.position += Vector3(
+		sin(_camera_shake_phase * 1.7) * amount,
+		0.0,
+		cos(_camera_shake_phase * 2.3) * amount
+	)
 
 
 func _update_speed_hud() -> void:
@@ -571,15 +621,15 @@ func _mouse_to_ground(screen_position: Vector2) -> Vector3:
 
 
 func _zoom_camera(factor: float) -> void:
-	camera.size = clampf(camera.size * factor, CAMERA_ZOOM_MIN, CAMERA_ZOOM_MAX)
+	_camera_target_size = clampf(_camera_target_size * factor, CAMERA_ZOOM_MIN, CAMERA_ZOOM_MAX)
 
 
 func _pan_camera(screen_delta: Vector2) -> void:
 	var viewport_height := maxf(get_viewport().get_visible_rect().size.y, 1.0)
-	var units_per_pixel := camera.size * 2.0 / viewport_height
-	camera.position += Vector3(-screen_delta.x, 0.0, -screen_delta.y) * units_per_pixel
-	camera.position.x = clampf(camera.position.x, CAMERA_BOUNDS_MIN.x, CAMERA_BOUNDS_MAX.x)
-	camera.position.z = clampf(camera.position.z, CAMERA_BOUNDS_MIN.y, CAMERA_BOUNDS_MAX.y)
+	var units_per_pixel := _camera_target_size * 2.0 / viewport_height
+	_camera_target_position += Vector3(-screen_delta.x, 0.0, -screen_delta.y) * units_per_pixel
+	_camera_target_position.x = clampf(_camera_target_position.x, CAMERA_BOUNDS_MIN.x, CAMERA_BOUNDS_MAX.x)
+	_camera_target_position.z = clampf(_camera_target_position.z, CAMERA_BOUNDS_MIN.y, CAMERA_BOUNDS_MAX.y)
 
 
 func _issue_move(points: Array[Vector3]) -> void:
@@ -624,6 +674,9 @@ func _issue_move_for_units(units: Array[UnitBase], points: Array[Vector3], comma
 		command.tick = tick
 		tick += 1
 		EventBus.command_issued.emit(command)
+	if command_player_id == 0:
+		_show_command_pulse(center, Color(0.35, 0.82, 1.0, 0.9), 0.18 + _average_radius(valid_units) * 2.0)
+		GameSettings.play_move_confirm()
 
 
 func _average_radius(units: Array[UnitBase]) -> float:
@@ -659,18 +712,24 @@ func _formation_slots(count: int, center: Vector3, forward: Vector3, average_rad
 
 func _issue_charge() -> void:
 	var unit_ids: Array[int] = []
+	var center := Vector3.ZERO
+	var count := 0
 	for unit in selected_units:
 		if is_instance_valid(unit) and float(unit.data.get_stat(&"charge_max_speed", 0.0)) > 0.0:
 			unit_ids.append(unit.instance_id)
+			center += unit.global_position
+			count += 1
 	if unit_ids.is_empty():
 		return
+	center /= float(count)
 	var command := Command.new()
 	command.type = &"charge"
 	command.player_id = 0
 	command.unit_ids = unit_ids
 	command.tick = Engine.get_process_frames()
 	EventBus.command_issued.emit(command)
-	GameSettings.play_click()
+	_show_command_pulse(center, Color(1.0, 0.66, 0.2, 0.95), 0.28)
+	GameSettings.play_move_confirm(0.72)
 
 
 func _select_same_type() -> void:
@@ -762,7 +821,8 @@ func _issue_defense_line(start: Vector3, finish: Vector3) -> void:
 		command.tick = tick
 		tick += 1
 		EventBus.command_issued.emit(command)
-	GameSettings.play_click()
+	_show_command_pulse(midpoint, Color(0.35, 0.92, 1.0, 0.9), 0.2)
+	GameSettings.play_move_confirm(0.88)
 
 
 func _line_facing(midpoint: Vector3, perpendicular: Vector3) -> Vector3:
@@ -802,6 +862,52 @@ func _on_charge_dust(position: Vector3) -> void:
 	tween.tween_property(dust, "scale", Vector3(2.2, 1.0, 2.2), 1.0)
 	tween.tween_property(material, "albedo_color:a", 0.0, 1.0)
 	tween.chain().tween_callback(dust.queue_free)
+
+
+func _show_command_pulse(position: Vector3, color: Color, radius: float) -> void:
+	var pulse := MeshInstance3D.new()
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = maxf(radius, 0.08)
+	mesh.bottom_radius = mesh.top_radius
+	mesh.height = 0.014
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	pulse.mesh = mesh
+	pulse.material_override = material
+	pulse.position = Vector3(position.x, 0.045, position.z)
+	add_child(pulse)
+	var tween := create_tween()
+	tween.set_parallel(true)
+	tween.tween_property(pulse, "scale", Vector3(2.1, 1.0, 2.1), 0.34) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(material, "albedo_color:a", 0.0, 0.38)
+	tween.chain().tween_callback(pulse.queue_free)
+
+
+func _on_unit_attacked(attacker: UnitBase, target: UnitBase, damage: float, is_counter: bool) -> void:
+	if damage <= 0.0 or attacker == null or not is_instance_valid(attacker):
+		return
+	if target == null or not is_instance_valid(target):
+		return
+	# 冲锋由专门的重击音效与镜头震动表现，避免同一撞击叠两层普通命中声。
+	if attacker.is_charging:
+		return
+	var now := Time.get_ticks_msec()
+	if now - _last_hit_sound_msec < 45:
+		return
+	_last_hit_sound_msec = now
+	GameSettings.play_melee_hit(is_counter)
+
+
+func _on_charge_impact(position: Vector3, strength: float) -> void:
+	GameSettings.play_charge_impact()
+	_show_command_pulse(position, Color(1.0, 0.62, 0.2, 0.95), 0.12)
+	_camera_shake_strength = maxf(_camera_shake_strength, clampf(strength, 0.2, 1.0) * 0.045)
+	_camera_shake_time = 0.16
+	_camera_shake_phase = 0.0
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -1122,6 +1228,10 @@ func _update_hud() -> void:
 
 
 func _on_unit_died(unit: UnitBase) -> void:
+	var now := Time.get_ticks_msec()
+	if now - _last_death_sound_msec >= 55:
+		_last_death_sound_msec = now
+		GameSettings.play_unit_death()
 	selected_units.erase(unit)
 	units_by_id.erase(unit.instance_id)
 	EventBus.selection_changed.emit(selected_units.size())

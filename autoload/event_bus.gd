@@ -20,3 +20,6 @@ signal selection_changed(selected_count: int)
 
 ## 冲锋经过地面时产生灰尘。
 signal charge_dust(position: Vector3)
+
+## 冲锋撞击到敌军；表现层只对此类重大撞击使用镜头震动。
+signal charge_impact(position: Vector3, strength: float)
